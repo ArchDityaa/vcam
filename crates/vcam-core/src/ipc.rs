@@ -70,6 +70,10 @@ pub enum Command {
     SetProfileAuto {
         enabled: bool,
     },
+    /// Turn the Chromium/Electron `YUYV` compatibility shim on or off.
+    SetCompatibility {
+        enabled: bool,
+    },
     /// Report the configured profiles and the active one.
     Profiles,
     Doctor,
@@ -91,6 +95,7 @@ impl Command {
             Self::SetOutput { .. } => "set_output",
             Self::SetProfile { .. } => "set_profile",
             Self::SetProfileAuto { .. } => "set_profile_auto",
+            Self::SetCompatibility { .. } => "set_compatibility",
             Self::Profiles => "profiles",
             Self::Doctor => "doctor",
             Self::Reload => "reload",

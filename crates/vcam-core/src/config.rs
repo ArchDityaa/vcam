@@ -39,6 +39,9 @@ pub struct Config {
     pub source: SourceConfig,
     pub daemon: DaemonConfig,
     pub watchdog: WatchdogConfig,
+    /// Compatibility shims for applications that do not follow the V4L2
+    /// conventions to the letter.
+    pub compatibility: CompatibilityConfig,
     /// Per-application output profiles, matched in order.
     pub profiles: Vec<Profile>,
 }
@@ -383,6 +386,34 @@ impl Default for DaemonConfig {
     }
 }
 
+/// Compatibility shims for applications that do not follow the V4L2
+/// conventions to the letter.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CompatibilityConfig {
+    /// Advertise `YUYV` while a Chromium/Electron application is running.
+    ///
+    /// Chromium-based applications (Discord, Chrome, Brave, Slack, ...)
+    /// routinely fail to list a loopback device that only offers `NV12`, and
+    /// show up as soon as the device offers `YUYV`. The daemon watches for those
+    /// processes and switches the output to `YUYV` while any of them is
+    /// running (deferred while an application is streaming, exactly like any
+    /// other caps change), then returns to the configured pixel format.
+    ///
+    /// Turn it off with `vcam compat off` or `chromium_yuyv = false`.
+    pub chromium_yuyv: bool,
+}
+
+impl Default for CompatibilityConfig {
+    fn default() -> Self {
+        Self {
+            // On by default: the failure it prevents is silent and users
+            // otherwise have to know that YUYV is the fix.
+            chromium_yuyv: true,
+        }
+    }
+}
+
 /// Health limits for the pipeline watchdog.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -538,6 +569,16 @@ mod tests {
         cfg.validate().unwrap();
         assert_eq!(cfg.device_path(), PathBuf::from("/dev/video10"));
         assert_eq!(cfg.output.frame_size(), 1280 * 720 * 3 / 2);
+        // The Chromium shim is on by default so that Discord/Chrome users do
+        // not have to discover the YUYV requirement themselves.
+        assert!(cfg.compatibility.chromium_yuyv);
+    }
+
+    #[test]
+    fn serializes_the_compatibility_section() {
+        let text = toml::to_string(&Config::default()).unwrap();
+        assert!(text.contains("[compatibility]"));
+        assert!(text.contains("chromium_yuyv = true"));
     }
 
     #[test]
