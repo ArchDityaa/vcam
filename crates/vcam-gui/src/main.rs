@@ -503,6 +503,9 @@ fn build_ui(app: &gtk::Application) {
                 if let Some(message) = &status.message {
                     text.push_str(&format!(" ({message})"));
                 }
+                if let Some(compatibility) = &status.compatibility {
+                    text.push_str(&format!("  •  {compatibility}"));
+                }
                 state_label.set_text(&text);
 
                 let source = status

@@ -9,8 +9,8 @@ use vcam_core::ipc::{Command, Response};
 use vcam_core::preview;
 use vcam_core::util::expand_path;
 use vcam_core::{
-    consumers, select_profile, Config, Consumer, Event, FitMode, OutputConfig, PixelFormat,
-    PlaybackState, Status,
+    access, compat, consumers, select_profile, Config, Consumer, Event, FitMode, OutputConfig,
+    PixelFormat, PlaybackState, Status,
 };
 
 use crate::decoder::{Decoder, DecoderEvent};
@@ -110,6 +110,12 @@ struct Controller {
     pending_profile: Option<String>,
     auto_profile: bool,
     active_profile: Option<String>,
+    /// Chromium-family applications seen in the process table, refreshed every
+    /// couple of seconds. They need `YUYV` to list the camera at all.
+    chromium_apps: Vec<String>,
+    next_compat_poll: Instant,
+    /// Whether the Chromium/Electron `YUYV` shim may change the output.
+    compat_shim: bool,
     shutdown_notify: Arc<Notify>,
 }
 
@@ -188,6 +194,15 @@ impl Controller {
             ));
         }
 
+        // Report an unusable device before touching GStreamer: the pipeline
+        // error for a permission problem ("Element failed to change its
+        // state") says nothing about groups or sessions, and that is the most
+        // common way to end up with a camera that no application can see.
+        let device_access = access::inspect(&device);
+        if !device_access.is_ok() {
+            return Err(device_access.explain());
+        }
+
         let output = Output::new(&device, &config.output)?;
         let black_frame = frame::black_frame(&config.output);
         let status = Status {
@@ -204,11 +219,13 @@ impl Controller {
             consumers: Vec::new(),
             pending: None,
             profile: None,
+            compatibility: None,
         };
 
         let preview_path = preview::preview_path(&config.socket_path());
         let watchdog = Watchdog::new(&config.watchdog, Instant::now());
         let auto_profile = config.daemon.auto_profiles;
+        let compat_shim = config.compatibility.chromium_yuyv;
         let base_output = config.output.clone();
         let mut controller = Self {
             config,
@@ -234,6 +251,9 @@ impl Controller {
             pending_profile: None,
             auto_profile,
             active_profile: None,
+            chromium_apps: Vec::new(),
+            next_compat_poll: Instant::now(),
+            compat_shim,
             shutdown_notify,
         };
 
@@ -281,6 +301,13 @@ impl Controller {
             if now >= self.next_consumer_poll {
                 self.poll_consumers();
                 self.next_consumer_poll = now + Duration::from_secs(1);
+            }
+
+            // Chromium-family applications need YUYV to list the camera, so
+            // watch for them a little less often than for readers.
+            if now >= self.next_compat_poll {
+                self.poll_compatibility();
+                self.next_compat_poll = now + Duration::from_secs(2);
             }
 
             if now >= next_health {
@@ -437,6 +464,7 @@ impl Controller {
                 rotate,
                 force,
             } => {
+                let format_pinned = pixel_format.is_some();
                 let output = self.merged_output(OutputUpdate {
                     width,
                     height,
@@ -449,6 +477,20 @@ impl Controller {
                 let target = output.clone();
                 self.apply_output(output, force.unwrap_or(false))?;
                 self.base_output = target;
+                // Picking a pixel format explicitly is a deliberate choice, so
+                // it wins over the Chromium shim until `vcam compat on`.
+                if format_pinned && self.compat_shim {
+                    self.compat_shim = false;
+                    self.config.compatibility.chromium_yuyv = false;
+                    self.chromium_apps.clear();
+                    self.status.message = Some(
+                        "explicit pixel format; the Chromium YUYV shim is off (vcam compat on)"
+                            .to_string(),
+                    );
+                }
+                // The base changed: re-resolve profiles and the Chromium shim
+                // against it instead of leaving the old decision in place.
+                self.reconcile_output();
                 self.status_value()
             }
             Command::SetProfile { name, force } => {
@@ -483,8 +525,19 @@ impl Controller {
                 self.auto_profile = enabled;
                 self.config.daemon.auto_profiles = enabled;
                 if enabled {
-                    self.reconcile_profile();
+                    self.reconcile_output();
                 }
+                self.emit_status();
+                self.status_value()
+            }
+            Command::SetCompatibility { enabled } => {
+                self.compat_shim = enabled;
+                self.config.compatibility.chromium_yuyv = enabled;
+                // Refresh the process list now so the answer does not depend on
+                // the next poll, and forget it when the shim is off so the
+                // configured format is restored immediately.
+                self.chromium_apps = if enabled { compat::scan() } else { Vec::new() };
+                self.reconcile_output();
                 self.emit_status();
                 self.status_value()
             }
@@ -632,31 +685,83 @@ impl Controller {
         if consumers != self.consumers {
             self.consumers = consumers;
             self.status.consumers = self.consumers.clone();
-            self.reconcile_profile();
+            self.reconcile_output();
             self.emit_status();
         }
         self.reconcile_pending();
     }
 
-    /// Apply the first `[[profiles]]` entry matching a current consumer, or
-    /// restore the base output when nothing matches. A change that would
-    /// renegotiate the device caps is deferred until the camera is free.
-    fn reconcile_profile(&mut self) {
-        if !self.auto_profile || self.config.profiles.is_empty() {
+    /// Notice Chromium-family applications starting and stopping. They are
+    /// not necessarily camera consumers yet — the whole point is to advertise
+    /// YUYV *before* they enumerate devices, because a camera that only offers
+    /// NV12 is routinely missing from their list.
+    fn poll_compatibility(&mut self) {
+        if !self.compat_shim {
+            // Nothing depends on the list while the shim is off, and
+            // `vcam compat on` scans on demand.
             return;
         }
-        let executables: Vec<String> = self
-            .consumers
-            .iter()
-            .map(|consumer| consumer.label().to_string())
-            .collect();
-        let (name, target) = match select_profile(&self.config.profiles, &executables).cloned() {
-            Some(profile) => {
-                let target = profile.patch.apply(&self.base_output);
-                (Some(profile.name), target)
+        let apps = compat::scan();
+        if apps == self.chromium_apps {
+            return;
+        }
+        self.chromium_apps = apps;
+        match compat::note(&self.chromium_apps) {
+            Some(note) => tracing::info!(%note, "chromium/electron application detected"),
+            None => {
+                tracing::info!(
+                    "no chromium/electron application left; restoring the configured output"
+                )
             }
-            None => (None, self.base_output.clone()),
-        };
+        }
+        self.reconcile_output();
+        self.emit_status();
+    }
+
+    /// The output that should currently be negotiated, and why.
+    ///
+    /// Precedence: a pinned profile (`vcam profile use`) wins over everything,
+    /// then an automatic profile matching a current consumer, then the
+    /// Chromium shim, then the configured base output.
+    fn desired_output(&self) -> (Option<String>, OutputConfig, Option<String>) {
+        // An explicit choice is never overridden — not even by the shim.
+        if !self.auto_profile && self.active_profile.is_some() {
+            return (
+                self.active_profile.clone(),
+                self.config.output.clone(),
+                None,
+            );
+        }
+
+        if self.auto_profile && !self.config.profiles.is_empty() {
+            let executables: Vec<String> = self
+                .consumers
+                .iter()
+                .map(|consumer| consumer.label().to_string())
+                .collect();
+            if let Some(profile) = select_profile(&self.config.profiles, &executables).cloned() {
+                let target = profile.patch.apply(&self.base_output);
+                return (Some(profile.name), target, None);
+            }
+        }
+
+        if self.compat_shim
+            && !self.chromium_apps.is_empty()
+            && self.base_output.pixel_format != PixelFormat::Yuyv
+        {
+            let mut target = self.base_output.clone();
+            target.pixel_format = PixelFormat::Yuyv;
+            return (None, target, compat::note(&self.chromium_apps));
+        }
+
+        (None, self.base_output.clone(), None)
+    }
+
+    /// Apply the output implied by the current consumers, running Chromium
+    /// applications and configured profiles. A change that would renegotiate
+    /// the device caps is deferred until the camera is free.
+    fn reconcile_output(&mut self) {
+        let (name, target, note) = self.desired_output();
 
         if target != self.config.output {
             if let Err(error) = self.apply_output(target.clone(), false) {
@@ -670,6 +775,7 @@ impl Controller {
         self.active_profile = if applied { name.clone() } else { None };
         self.pending_profile = if applied { None } else { name };
         self.status.profile = self.active_profile.clone();
+        self.status.compatibility = if applied { note } else { None };
     }
 
     /// Apply an output change that was deferred while applications were using
@@ -689,6 +795,10 @@ impl Controller {
             self.active_profile = Some(name);
             self.status.profile = self.active_profile.clone();
         }
+        // The deferred change may have been the Chromium shim; recompute the
+        // note from the state that is actually negotiated now.
+        let (_, _, note) = self.desired_output();
+        self.status.compatibility = note;
         self.emit_status();
     }
 
@@ -753,12 +863,25 @@ impl Controller {
                 self.status.message = Some(format!("recovering: {reason}"));
             }
             Err(error) => {
+                let error = self.explain_output_error(error);
                 self.watchdog.note_recovery_failed();
                 tracing::warn!(%error, "output pipeline recovery failed");
                 self.status.message = Some(format!("recovery failed: {error}"));
             }
         }
         self.emit_status();
+    }
+
+    /// Add the access diagnosis to a pipeline failure when the device is not
+    /// actually usable. A bare "Element failed to change its state" tells the
+    /// user nothing about groups or sessions, which is what this class of
+    /// failure is usually about.
+    fn explain_output_error(&self, error: String) -> String {
+        let access = access::inspect(&self.device);
+        if access.is_ok() {
+            return error;
+        }
+        format!("{error}\n{}", access.explain())
     }
 
     fn poll_decoder_events(&mut self) {
@@ -894,6 +1017,7 @@ impl Controller {
                     self.output = output;
                 }
                 Err(error) => {
+                    let error = self.explain_output_error(error);
                     self.output = Output::new(&self.device, &old_output).map_err(|restore| {
                         format!(
                             "{error}; additionally failed to restore the previous output: {restore}"
@@ -956,21 +1080,30 @@ impl Controller {
         self.config.source = new_config.source;
         self.config.daemon = new_config.daemon;
         self.config.watchdog = new_config.watchdog;
+        self.config.compatibility = new_config.compatibility;
         self.config.profiles = new_config.profiles;
         self.base_output = new_config.output;
         self.auto_profile = self.config.daemon.auto_profiles;
+        self.compat_shim = self.config.compatibility.chromium_yuyv;
         self.watchdog = Watchdog::new(&self.config.watchdog, Instant::now());
 
-        // Re-resolve the output: a matching profile when auto mode is on,
-        // otherwise the configured base output.
+        // Re-resolve the output: a matching profile, the Chromium shim, or the
+        // configured base output.
+        self.chromium_apps = if self.compat_shim {
+            compat::scan()
+        } else {
+            Vec::new()
+        };
         if self.auto_profile && !self.config.profiles.is_empty() {
-            self.reconcile_profile();
+            self.reconcile_output();
         } else {
             self.active_profile = None;
             self.status.profile = None;
             if self.base_output != self.config.output {
                 self.apply_output(self.base_output.clone(), false)?;
             }
+            let (_, _, note) = self.desired_output();
+            self.status.compatibility = note;
         }
 
         if self.status.state == PlaybackState::Idle && self.config.source.autostart {
