@@ -1,0 +1,24 @@
+[package]
+name = "vcam-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+description = "GTK4 control panel for vcam"
+
+[[bin]]
+name = "vcam-gui"
+path = "src/main.rs"
+
+[dependencies]
+vcam-core = { path = "../vcam-core" }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+glib.workspace = true
+gtk4.workspace = true
+libadwaita.workspace = true
