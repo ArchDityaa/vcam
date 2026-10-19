@@ -4,12 +4,11 @@
 //! — which is exactly when it is most useful, for example when the device node
 //! does not exist yet.
 
-use std::ffi::CString;
 use std::os::unix::fs::FileTypeExt;
 use std::path::Path;
 
 use gstreamer as gst;
-use vcam_core::{Check, Config, DoctorReport};
+use vcam_core::{access, compat, Check, Config, DoctorReport};
 
 const REQUIRED_ELEMENTS: &[&str] = &[
     "appsrc",
@@ -82,18 +81,28 @@ pub fn run(config: &Config, device: &Path) -> DoctorReport {
             },
         ));
 
-        let mode = metadata
-            .as_ref()
-            .map(|metadata| {
-                use std::os::unix::fs::PermissionsExt;
-                format!("{:04o}", metadata.permissions().mode() & 0o7777)
-            })
-            .unwrap_or_else(|_| "unknown".to_string());
+        let access = access::inspect(device);
         checks.push(Check::new(
             "device permissions",
-            readable_and_writable(device),
-            format!("mode {mode}"),
+            access.writable && access.readable,
+            access.detail(),
         ));
+        if !access.is_ok() {
+            // A bare "permission denied" is what makes this class of problem
+            // expensive to debug, so spell out the fix.
+            checks.push(Check::new(
+                "device access remedy",
+                false,
+                access.remediation().join(" | "),
+            ));
+        }
+        if matches!(access.state, access::AccessState::StaleSession { .. }) {
+            checks.push(Check::new(
+                "session group membership",
+                false,
+                "applications started from this session (Discord, Chrome, ...) cannot see the camera until the session is restarted".to_string(),
+            ));
+        }
 
         let sys_name = device
             .file_name()
@@ -140,6 +149,28 @@ pub fn run(config: &Config, device: &Path) -> DoctorReport {
         },
     ));
 
+    // Chromium-based applications are the most common source of a "camera is
+    // not listed" report, so report what the daemon will do about them.
+    let chromium_apps = compat::scan();
+    let shim = config.compatibility.chromium_yuyv;
+    let shim_state = if shim { "enabled" } else { "disabled" };
+    checks.push(Check::new(
+        "chromium/electron apps",
+        true,
+        if chromium_apps.is_empty() {
+            format!(
+                "none running; the YUYV compatibility shim is {shim_state} ({} configured)",
+                config.output.pixel_format
+            )
+        } else {
+            format!(
+                "{} running ({}); the YUYV compatibility shim is {shim_state}",
+                chromium_apps.len(),
+                chromium_apps.join(", ")
+            )
+        },
+    ));
+
     if let Some(source) = &config.source.path {
         let exists = source.is_file();
         checks.push(Check::new(
@@ -155,12 +186,4 @@ pub fn run(config: &Config, device: &Path) -> DoctorReport {
 
     let ok = checks.iter().all(|check| check.ok);
     DoctorReport { ok, checks }
-}
-
-fn readable_and_writable(path: &Path) -> bool {
-    let Ok(path) = CString::new(path.to_string_lossy().as_bytes()) else {
-        return false;
-    };
-    // SAFETY: the CString is NUL-terminated and valid for the duration of the call.
-    unsafe { libc::access(path.as_ptr(), libc::R_OK | libc::W_OK) == 0 }
 }

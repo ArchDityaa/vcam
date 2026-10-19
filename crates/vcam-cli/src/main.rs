@@ -81,6 +81,11 @@ enum Commands {
         #[command(subcommand)]
         command: ProfileCommands,
     },
+    /// Turn the Chromium/Electron compatibility shim on or off
+    Compat {
+        #[arg(value_name = "on|off")]
+        state: String,
+    },
     /// Run diagnostics on the module, device, and GStreamer installation
     Doctor {
         /// Device to check (defaults to the configured device)
@@ -181,11 +186,7 @@ fn run() -> Result<(), String> {
             print_status_value(&data)?;
         }
         Commands::Loop { state } => {
-            let enabled = match state.trim().to_ascii_lowercase().as_str() {
-                "on" | "true" | "yes" | "1" => true,
-                "off" | "false" | "no" | "0" => false,
-                other => return Err(format!("invalid loop state '{other}' (use on or off)")),
-            };
+            let enabled = parse_on_off(&state, "loop")?;
             let data = request(&socket, Command::SetLoop { enabled })?;
             print_status_value(&data)?;
         }
@@ -235,15 +236,16 @@ fn run() -> Result<(), String> {
                 print_status_value(&data)?;
             }
             ProfileCommands::Auto { state } => {
-                let enabled = match state.trim().to_ascii_lowercase().as_str() {
-                    "on" | "true" | "yes" | "1" => true,
-                    "off" | "false" | "no" | "0" => false,
-                    other => return Err(format!("invalid auto state '{other}' (use on or off)")),
-                };
+                let enabled = parse_on_off(&state, "auto")?;
                 let data = request(&socket, Command::SetProfileAuto { enabled })?;
                 print_status_value(&data)?;
             }
         },
+        Commands::Compat { state } => {
+            let enabled = parse_on_off(&state, "compat")?;
+            let data = request(&socket, Command::SetCompatibility { enabled })?;
+            print_status_value(&data)?;
+        }
         Commands::Doctor { device } => {
             // Run locally rather than through the daemon: the daemon cannot
             // start when the device is missing, which is exactly the case the
@@ -269,6 +271,15 @@ fn run() -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// Parse the `on|off` style arguments used by the toggles.
+fn parse_on_off(state: &str, label: &str) -> Result<bool, String> {
+    match state.trim().to_ascii_lowercase().as_str() {
+        "on" | "true" | "yes" | "1" => Ok(true),
+        "off" | "false" | "no" | "0" => Ok(false),
+        other => Err(format!("invalid {label} state '{other}' (use on or off)")),
+    }
 }
 
 /// Resolve a user supplied path against the client's working directory. The
@@ -378,6 +389,9 @@ fn print_status(status: &Status) {
     if let Some(profile) = &status.profile {
         println!("Profile:  {profile}");
     }
+    if let Some(compatibility) = &status.compatibility {
+        println!("Compat:   {compatibility}");
+    }
     if !status.consumers.is_empty() {
         let names: Vec<String> = status
             .consumers
@@ -399,12 +413,20 @@ fn print_consumers(status: &Status) {
         println!("No applications are using {}.", status.device);
         return;
     }
-    println!("{:<8} {:<24} MODE", "PID", "APPLICATION");
+    println!("{:<8} {:<24} {:<12} MODE", "PID", "APPLICATION", "TYPE");
     for consumer in &status.consumers {
+        // Chromium-family applications are the ones that need YUYV, so say so
+        // instead of leaving the user to guess why the format changed.
+        let kind = if vcam_core::compat::is_chromium_family(consumer.label()) {
+            "chromium"
+        } else {
+            "native"
+        };
         println!(
-            "{:<8} {:<24} {}",
+            "{:<8} {:<24} {:<12} {}",
             consumer.pid,
             consumer.label(),
+            kind,
             consumer.mode.as_str()
         );
     }

@@ -132,9 +132,13 @@ impl Output {
                 })
                 .unwrap_or_else(|| "unknown pipeline error".to_string());
             let _ = pipeline.set_state(gst::State::Null);
+            let hint = if detail.contains("Permission denied") || detail.contains("permission") {
+                " The device node is not accessible: check the 'video' group and log in again."
+            } else {
+                " Is another producer already using the device?"
+            };
             return Err(format!(
-                "cannot open virtual camera {device_string}: {detail}. \
-                 Is another producer already using the device?"
+                "cannot open virtual camera {device_string}: {detail}.{hint}"
             ));
         }
 
