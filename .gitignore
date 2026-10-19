@@ -1,0 +1,16 @@
+# Rust build output
+/target
+
+# Packaging output
+*.deb
+
+# Local runtime / preview artifacts
+*.raw
+*.log
+
+# Editor / OS noise
+.DS_Store
+.opencode/
+
+# Leftovers
+Cargo.lock.orig
