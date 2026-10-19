@@ -47,6 +47,10 @@ pub struct Status {
     /// Name of the profile currently applied automatically.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// Why the output format currently differs from the configured one, e.g.
+    /// because a Chromium-family application is running and needs `YUYV`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compatibility: Option<String>,
 }
 
 /// Result of a single diagnostic check.
