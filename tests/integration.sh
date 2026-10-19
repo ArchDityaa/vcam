@@ -88,6 +88,12 @@ cat > "$workdir/config.toml" <<EOF
 [daemon]
 socket = "$socket"
 
+# The shim is exercised explicitly further down; keep it off here so the
+# ambient Chromium processes of the test machine cannot change the format
+# under the other assertions.
+[compatibility]
+chromium_yuyv = false
+
 [[profiles]]
 name = "ctl-fill"
 match = ["v4l2-ctl"]
@@ -277,6 +283,78 @@ fi
 
 # Restore a predictable format for the placeholder check below.
 "$vcam" --socket "$socket" output --width 1280 --height 720 --fps 30 --pixel-format NV12 >/dev/null
+sleep 1
+
+say "compatibility shim"
+# The shim keys off /proc/<pid>/comm, so renaming a harmless binary is enough
+# to stand in for Discord without needing a browser in the test environment.
+cp /bin/sleep "$workdir/discord"
+"$workdir/discord" 60 &
+fake_pid=$!
+"$vcam" --socket "$socket" compat on >/dev/null
+switched=no
+for _ in $(seq 1 20); do
+    if grep -q 'YUYV' <(v4l2-ctl -d "$device" --list-formats-ext); then
+        switched=yes
+        break
+    fi
+    sleep 0.3
+done
+if [[ "$switched" == "yes" ]]; then
+    pass "YUYV is advertised while a chromium application runs"
+else
+    fail "the shim did not switch to YUYV"
+fi
+if grep -q '^Compat:' <("$vcam" --socket "$socket" status); then
+    pass "status explains why the format changed"
+else
+    fail "status does not explain the format"
+fi
+
+kill "$fake_pid" 2>/dev/null
+wait "$fake_pid" 2>/dev/null
+if "$vcam" --socket "$socket" doctor | grep -q 'none running'; then
+    reverted=no
+    for _ in $(seq 1 20); do
+        if grep -q 'NV12' <(v4l2-ctl -d "$device" --list-formats-ext); then
+            reverted=yes
+            break
+        fi
+        sleep 0.3
+    done
+    if [[ "$reverted" == "yes" ]]; then
+        pass "the configured format comes back when it exits"
+    else
+        fail "the configured format was not restored"
+    fi
+    if grep -q '^Compat:' <("$vcam" --socket "$socket" status); then
+        fail "the compatibility note is stale"
+    else
+        pass "compatibility note cleared"
+    fi
+else
+    # Another Chromium-family application is running for this user, so YUYV is
+    # still the correct format and there is nothing to revert to.
+    echo "  skip format revert (another chromium application is running for this user)"
+fi
+"$vcam" --socket "$socket" compat off >/dev/null
+
+say "chromium readers"
+if command -v gst-launch-1.0 >/dev/null 2>&1; then
+    cp "$(command -v gst-launch-1.0)" "$workdir/discord"
+    "$workdir/discord" v4l2src device="$device" num-buffers=300 ! fakesink >/dev/null 2>&1 &
+    reader_pid=$!
+    sleep 2
+    if "$vcam" --socket "$socket" consumers | grep -q 'chromium'; then
+        pass "a chromium-family reader is labelled as such"
+    else
+        fail "a chromium-family reader was not labelled"
+    fi
+    kill "$reader_pid" 2>/dev/null
+    wait "$reader_pid" 2>/dev/null
+else
+    echo "  skip chromium reader label (gst-launch-1.0 not installed)"
+fi
 sleep 1
 
 say "stop and shutdown"
