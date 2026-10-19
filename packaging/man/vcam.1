@@ -66,12 +66,23 @@ Apply the named profile and pin it (turns automatic selection off).
 Turn automatic profile selection on or off. Turning it on re-resolves the
 output immediately.
 .TP
+.B compat on|off
+Turn the Chromium/Electron compatibility shim on or off. When it is on (the
+default) the daemon advertises
+.B YUYV
+while a Chromium-based application such as Discord, Chrome or Slack is
+running, because those applications routinely fail to list a loopback device
+that only offers
+.BR NV12 .
+The configured pixel format is restored when they exit.
+.TP
 .B status [\-\-json]
 Print daemon status.
 .TP
 .B doctor [\-\-device PATH]
-Run diagnostics on the module, device, permissions and GStreamer elements.
-This runs locally and does not require a running daemon. Use
+Run diagnostics on the module, device, access permissions and GStreamer
+elements, and report the Chromium/Electron compatibility state. This runs
+locally and does not require a running daemon. Use
 .B \-\-device
 to check a device other than the configured one.
 .TP

@@ -95,8 +95,11 @@ if [ "$1" = "configure" ]; then
     user="${SUDO_USER:-$(id -un)}"
     if ! id -nG "$user" 2>/dev/null | grep -qw video; then
         echo "vcam: add $user to the 'video' group: sudo usermod -aG video $user" >&2
+        echo "vcam: ...then log out and back in: group changes only reach new sessions," >&2
+        echo "vcam: and applications started before that cannot see the camera." >&2
     fi
     echo "vcam: load the module now with: sudo modprobe v4l2loopback" >&2
+    echo "vcam: if an application does not list 'Virtual Camera', run: vcam doctor" >&2
 fi
 EOF
 chmod 0755 "$stage/DEBIAN/postinst"

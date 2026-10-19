@@ -1,3 +1,9 @@
 # Allow members of the "video" group to read and write the virtual camera.
 # The label matches card_label= in the v4l2loopback module options.
-SUBSYSTEM=="video4linux", KERNEL=="video[0-9]*", ATTR{name}=="Virtual Camera", GROUP="video", MODE="0660"
+#
+# TAG+="uaccess" additionally lets systemd-logind grant the *active session*
+# user an ACL on the node. Group changes only reach sessions that start after
+# them, so without this every application running in the session that was
+# already open during installation (Discord, Chrome, ...) silently misses the
+# camera until the user logs out and back in.
+SUBSYSTEM=="video4linux", KERNEL=="video[0-9]*", ATTR{name}=="Virtual Camera", TAG+="uaccess", GROUP="video", MODE="0660"
