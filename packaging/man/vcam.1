@@ -1,0 +1,93 @@
+.TH VCAM 1 "2026-10-19" "vcam 0.1.0" "User Commands"
+.SH NAME
+vcam \- control the vcam virtual camera
+.SH SYNOPSIS
+.B vcam
+.RB [ \-\-socket
+.IR PATH ]
+.IR COMMAND
+.RI [ OPTIONS ]
+.SH DESCRIPTION
+.B vcam
+is the command line client for
+.BR vcamd (1).
+It connects to the daemon over a Unix socket and sends a single request per
+invocation.
+.SH OPTIONS
+.TP
+.B \-\-socket PATH
+Path to the daemon control socket. Defaults to
+.IR $XDG_RUNTIME_DIR/vcam.sock .
+.SH COMMANDS
+.TP
+.B start [\-\-source FILE] [\-\-no\-loop]
+Start playing a video. Uses the configured source when
+.B \-\-source
+is omitted.
+.TP
+.B stop
+Stop playback and show the black placeholder.
+.TP
+.B pause
+Pause playback, keeping the last frame on screen.
+.TP
+.B resume
+Resume playback.
+.TP
+.B seek POSITION
+Seek to a position given as
+.IR SS ,
+.IR MM:SS " or " HH:MM:SS .
+.TP
+.B source FILE [\-\-no\-loop]
+Change the source video without restarting the daemon.
+.TP
+.B loop on|off
+Turn looping on or off for the current source.
+.TP
+.B output [\-\-width N] [\-\-height N] [\-\-fps N] [\-\-pixel\-format NV12|YUYV] [\-\-fit letterbox|fill|stretch] [\-\-mirror true|false] [\-\-rotate 0|90|180|270] [\-\-force]
+Change the virtual camera output format. A change that renegotiates the device
+caps is deferred while applications are using the camera, unless
+.B \-\-force
+is given.
+.TP
+.B consumers
+List the applications currently holding the camera open.
+.TP
+.B profile list
+List the configured
+.B [[profiles]]
+and which one is active.
+.TP
+.B profile use NAME [\-\-force]
+Apply the named profile and pin it (turns automatic selection off).
+.TP
+.B profile auto on|off
+Turn automatic profile selection on or off. Turning it on re-resolves the
+output immediately.
+.TP
+.B status [\-\-json]
+Print daemon status.
+.TP
+.B doctor [\-\-device PATH]
+Run diagnostics on the module, device, permissions and GStreamer elements.
+This runs locally and does not require a running daemon. Use
+.B \-\-device
+to check a device other than the configured one.
+.TP
+.B reload
+Reload the configuration file.
+.TP
+.B shutdown
+Ask the daemon to exit.
+.SH ENVIRONMENT
+.TP
+.B XDG_RUNTIME_DIR
+Used to locate the default control socket.
+.TP
+.B XDG_CONFIG_HOME
+Used to locate the default configuration file
+.IR $XDG_CONFIG_HOME/vcam/config.toml .
+.SH SEE ALSO
+.BR vcamd (1),
+.BR vcam-gui (1)

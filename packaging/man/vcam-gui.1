@@ -1,0 +1,19 @@
+.TH VCAM-GUI 1 "2026-10-19" "vcam 0.1.0" "User Commands"
+.SH NAME
+vcam-gui \- GTK4 control panel for the vcam virtual camera
+.SH SYNOPSIS
+.B vcam-gui
+.SH DESCRIPTION
+.B vcam-gui
+is a libadwaita control panel for
+.BR vcamd (1).
+It shows a live preview of the virtual camera and lets you choose a video,
+play, pause, stop, seek, toggle looping, change the output format and run the
+diagnostics.
+.PP
+It is an IPC client: it never owns the camera pipeline, and it can be used
+alongside
+.BR vcam (1).
+.SH SEE ALSO
+.BR vcam (1),
+.BR vcamd (1)

@@ -1,0 +1,70 @@
+.TH VCAMD 1 "2026-10-19" "vcam 0.1.0" "User Commands"
+.SH NAME
+vcamd \- virtual camera daemon
+.SH SYNOPSIS
+.B vcamd
+.RB [ \-\-config
+.IR FILE ]
+.RB [ \-\-device
+.IR PATH ]
+.RB [ \-\-log\-level
+.IR LEVEL ]
+.RB [ \-\-write\-default\-config ]
+.SH DESCRIPTION
+.B vcamd
+holds a v4l2loopback device open and feeds it frames from a GStreamer
+pipeline. Because the producer never stops, applications always see a normal
+capture device. When nothing is playing the daemon writes a black placeholder.
+.PP
+The daemon does not need root. It should run as your user, with your account in
+the
+.B video
+group, and it talks to clients over
+.IR $XDG_RUNTIME_DIR/vcam.sock .
+.PP
+A watchdog monitors the output pipeline. If frames stall, pushes keep failing,
+or memory grows without bound, it rebuilds the pipeline. If repeated rebuilds do
+not help it exits, so the systemd unit restarts it cleanly. The watchdog is
+configured with the
+.B [watchdog]
+table; see
+.IR ~/.config/vcam/config.toml .
+.PP
+The daemon detects which processes hold the camera open (same user only) and
+defers any change that would renegotiate the device caps until they let go. With
+.B auto_profiles
+enabled it applies matching
+.B [[profiles]]
+.SH OPTIONS
+.TP
+.B \-\-config FILE
+Configuration file. Defaults to
+.IR ~/.config/vcam/config.toml .
+.TP
+.B \-\-device PATH
+Override the V4L2 device path, for example
+.IR /dev/video10 .
+.TP
+.B \-\-log\-level LEVEL
+One of
+.IR error ,
+.IR warn ,
+.IR info ,
+.IR debug " or " trace .
+.TP
+.B \-\-write\-default\-config
+Write a default configuration file and exit.
+.SH FILES
+.TP
+.I ~/.config/vcam/config.toml
+Configuration file.
+.TP
+.I /usr/lib/systemd/user/vcamd.service
+User service unit.
+.TP
+.I /usr/lib/modprobe.d/v4l2loopback.conf
+Module options installed by the package.
+.SH SEE ALSO
+.BR vcam (1),
+.BR vcam-gui (1),
+.BR modprobe (8)

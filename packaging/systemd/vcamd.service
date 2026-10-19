@@ -1,0 +1,25 @@
+[Unit]
+Description=vcam virtual camera daemon
+Documentation=man:vcamd(1)
+# The daemon only needs the user session; it must not run as root.
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/vcamd
+Restart=on-failure
+RestartSec=2
+# The daemon only talks to /dev/videoN and the user runtime directory.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+# The socket lives in the runtime directory; everything else is read-only.
+ReadWritePaths=%t
+# Device access comes from the "video" group, which the user already has
+# after logging in. Do not set SupplementaryGroups here: a user manager is
+# not allowed to change group credentials (systemd status 216/GROUP).
+
+[Install]
+WantedBy=graphical-session.target

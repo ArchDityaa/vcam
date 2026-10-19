@@ -1,0 +1,3 @@
+# Allow members of the "video" group to read and write the virtual camera.
+# The label matches card_label= in the v4l2loopback module options.
+SUBSYSTEM=="video4linux", KERNEL=="video[0-9]*", ATTR{name}=="Virtual Camera", GROUP="video", MODE="0660"

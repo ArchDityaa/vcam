@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Virtual Camera
+GenericName=Virtual camera control panel
+Comment=Feed a video into a V4L2 device that applications see as a webcam
+Exec=vcam-gui
+Icon=io.github.ArchDityaa.Vcam
+Terminal=false
+Type=Application
+Categories=AudioVideo;Video;GTK;
+Keywords=camera;webcam;virtual;video;
+StartupNotify=true
