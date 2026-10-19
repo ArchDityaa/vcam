@@ -1,0 +1,16 @@
+[package]
+name = "vcam-doctor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+description = "Environment diagnostics shared by vcamd and the vcam CLI"
+
+[dependencies]
+vcam-core = { path = "../vcam-core" }
+gstreamer.workspace = true
+libc.workspace = true
