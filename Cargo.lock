@@ -1326,7 +1326,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "vcam-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1339,7 +1339,7 @@ dependencies = [
 
 [[package]]
 name = "vcam-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libc",
  "serde",
@@ -1350,7 +1350,7 @@ dependencies = [
 
 [[package]]
 name = "vcam-doctor"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "gstreamer",
  "libc",
@@ -1359,7 +1359,7 @@ dependencies = [
 
 [[package]]
 name = "vcam-gui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "glib",
@@ -1372,7 +1372,7 @@ dependencies = [
 
 [[package]]
 name = "vcamd"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",

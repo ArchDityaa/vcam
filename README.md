@@ -102,7 +102,7 @@ compositor-independent producer:
 Download the `.deb` from the [latest release](https://github.com/ArchDityaa/vcam/releases/latest):
 
 ```sh
-sudo apt install ./vcam_0.1.0_amd64.deb
+sudo apt install ./vcam_0.2.0_amd64.deb
 sudo modprobe v4l2loopback        # or reboot, modules-load.d loads it
 sudo usermod -aG video "$USER"    # then log out and back in
 ```
@@ -135,7 +135,7 @@ Or build the package yourself:
 
 ```sh
 packaging/build-deb.sh
-sudo apt install ./target/deb/vcam_0.1.0_amd64.deb
+sudo apt install ./target/deb/vcam_0.2.0_amd64.deb
 ```
 
 ## Set up the module
