@@ -1,0 +1,47 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - rust
+    groups:
+      gstreamer:
+        patterns:
+          - "gstreamer*"
+      gtk:
+        patterns:
+          - "gtk4"
+          - "libadwaita"
+          - "glib*"
+          - "gio*"
+          - "gdk*"
+      serde:
+        patterns:
+          - "serde*"
+          - "toml"
+      other:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "gstreamer*"
+          - "gtk4"
+          - "libadwaita"
+          - "glib*"
+          - "gio*"
+          - "gdk*"
+          - "serde*"
+          - "toml"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    labels:
+      - dependencies
+      - github-actions

@@ -1,0 +1,93 @@
+name: Bug report
+description: Something does not work as expected
+title: "[bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a problem. Please fill in as much
+        of this form as you can — the environment details are usually what
+        makes a camera bug reproducible.
+
+        If this is a security issue, **do not** open a public issue. Follow
+        [SECURITY.md](https://github.com/ArchDityaa/vcam/blob/main/SECURITY.md).
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the problem and what you expected instead.
+      placeholder: |
+        I selected "Virtual Camera" in Zoom, but the camera list showed
+        "No camera found". vcam status says the daemon is playing.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start the service with `systemctl --user start vcamd`
+        2. Run `vcam start --source testdata/sample.mp4`
+        3. Open Zoom and look at the camera list
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - vcamd (daemon)
+        - vcam (CLI)
+        - vcam-gui (GTK4 panel)
+        - packaging (.deb, systemd, udev)
+        - documentation
+        - not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Distribution, kernel, desktop and session type.
+      placeholder: |
+        Distribution: Ubuntu 24.04
+        Kernel: 6.8.0-45-generic
+        Desktop: GNOME 46 (Wayland)
+        v4l2loopback: 0.15.0
+        vcam: 0.1.0 (package / from source)
+    validations:
+      required: true
+
+  - type: input
+    id: module-options
+    attributes:
+      label: v4l2loopback options
+      description: Output of `cat /sys/module/v4l2loopback/parameters/*` or your modprobe.d file.
+      placeholder: 'video_nr=10 card_label="Virtual Camera" exclusive_caps=1 max_buffers=4'
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "`vcam doctor` output"
+      render: shell
+      placeholder: |
+        $ vcam doctor
+        ...
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Daemon logs
+      description: "`journalctl --user -u vcamd -b --no-pager` or the output of `vcamd --log-level debug`."
+      render: shell
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Screenshots, config file, the output of `vcam status`, or other context.
