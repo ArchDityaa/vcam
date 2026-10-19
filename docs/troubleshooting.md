@@ -40,12 +40,43 @@ sudo modprobe v4l2loopback \
 
 ## Permission denied opening /dev/video10
 
-The device node belongs to `root:video` with mode `0660`. Add yourself to the
-`video` group and log out and back in:
+`vcam doctor` classifies this for you; run it first. The device node belongs to
+`root:video` with mode `0660`, so a process can only open it when its own
+credentials carry the `video` group. There are two different reasons why they
+might not, and they need different fixes.
+
+**The account is not in the group.** `vcam doctor` reports
+`'you' is not a member of the 'video' group`:
 
 ```sh
 sudo usermod -aG video "$USER"
 ```
+
+**The account is in the group, but the session predates the change.** This is
+the case that costs people hours, because `id` in a fresh shell happily lists
+`video` while the running session does not actually carry it. Everything
+started from that session — Discord, Chrome, your terminal — inherits the stale
+set, cannot open the device, and silently drops the camera. `vcam doctor`
+reports it explicitly:
+
+```
+[FAIL] session group membership
+       applications started from this session (Discord, Chrome, ...) cannot
+       see the camera until the session is restarted
+```
+
+Log out and back in. There is no way to inject a supplementary group into an
+already running process, and that is true for every application, not just
+vcam. As a stopgap for the daemon itself:
+
+```sh
+sg video -c vcamd
+```
+
+The packaged udev rule carries `TAG+="uaccess"`, which lets systemd-logind
+grant the active session user an ACL on the node, so on a normal desktop the
+problem does not arise in the first place. If you are on a machine without
+logind (a container, a headless box), the `video` group remains the way in.
 
 If the udev rule is not installed, the node may be `root:root`. Copy
 `packaging/udev/70-vcam.rules` to `/etc/udev/rules.d/` and run:
@@ -57,17 +88,52 @@ sudo udevadm trigger --subsystem-match=video4linux
 
 ## Applications do not list the camera
 
-1. Confirm the daemon is running and the device is streaming:
+1. `vcam doctor` — it reports the device, its permissions, why they are wrong if
+   they are, and whether a Chromium/Electron application is running.
+2. Confirm the daemon is running and the device is streaming:
    ```sh
    vcam status
    v4l2-ctl -d /dev/video10 --list-formats-ext
    ```
-2. Restart the application after the daemon starts, or reload the page in the
+3. Restart the application after the daemon starts, or reload the page in the
    browser. Some applications only enumerate cameras at startup.
-3. In Chrome, check `chrome://media-internals` and make sure the camera is not
-   blocked by permissions.
 4. Make sure only one process writes to the device. Two producers fight over it
    and the result is usually `not-negotiated`.
+
+### Discord, Chrome, Brave, Slack, Signal (Chromium and Electron)
+
+Chromium-based applications do not use GStreamer to enumerate cameras; they
+talk to V4L2 directly, and in practice they frequently fail to list a loopback
+device that only advertises `NV12`. The same device advertising `YUYV`
+appears immediately.
+
+vcam handles this automatically. While any Chromium-family process is running,
+the daemon advertises `YUYV` and `vcam status` says so:
+
+```
+Compat:   advertising YUYV for Chromium/Electron applications (Discord)
+```
+
+When those applications exit the configured pixel format is restored. The
+switch happens while the camera is free, so it is safe to leave on; the change
+is deferred like any other caps change if something is already streaming.
+
+```sh
+vcam compat off     # advertise the configured format no matter what runs
+vcam compat on      # the default
+```
+
+If the camera is still missing, check in this order:
+
+1. The compatibility shim is enabled: `vcam status`, or `vcam compat on`.
+2. The application started *after* the daemon. An application that enumerated
+   the camera before the daemon held the device has nothing to open. Restart it
+   (in Chrome, `chrome://restart` is faster than a full restart).
+3. `chrome://media-internals` — a camera blocked by site permissions is not a
+   device problem.
+4. In Discord: **Settings → Voice & Video → Camera**, then the refresh icon.
+   Discord caches the device list aggressively; a full restart is sometimes the
+   only way to clear it.
 
 ## `not-negotiated` or `pipeline doesn't want to preroll`
 

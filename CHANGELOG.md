@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Chromium/Electron compatibility shim** — the daemon watches the process
+  table for Chromium-family applications (Discord, Chrome, Brave, Slack,
+  Signal, ...) and advertises `YUYV` while any of them is running, because they
+  routinely fail to list a loopback device that only offers `NV12`. The
+  configured pixel format returns when they exit. On by default; toggle with
+  `vcam compat on|off`, configure with `[compatibility] chromium_yuyv`.
+- **Access diagnosis** — `vcam-core::access` classifies why the device cannot
+  be opened, including the case that is invisible to `id`: the account is in
+  the `video` group but the current session started before the change, so every
+  application in it silently misses the camera. `vcam doctor` reports it with
+  the commands that fix it, and `vcamd` now refuses to start with that
+  explanation instead of a bare GStreamer state-change error.
+- `vcam doctor` reports the Chromium/Electron state, `vcam consumers` labels
+  Chromium-family readers, and `vcam status` explains a format that differs
+  from the configuration (`Status::compatibility`).
+- `[[profiles]]` matching, the Chromium shim and the base `[output]` are now
+  resolved by a single `desired_output` precedence rule.
+
+### Changed
+
+- The udev rule carries `TAG+="uaccess"`, so systemd-logind grants the active
+  session user access without waiting for a re-login after `usermod -aG video`.
+- `debian:postinst` explains the re-login requirement instead of only checking
+  group membership.
+- `Output::new` distinguishes a permission failure from an already-busy device
+  in its error message.
+
 ## [0.1.0] - 2026-10-20
 
 First public release.

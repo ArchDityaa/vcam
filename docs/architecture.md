@@ -190,6 +190,49 @@ if it would change the caps. When no profile matches it restores the base output
 An explicit `vcam profile use` pins a profile and turns automatic selection off
 until `vcam profile auto on`.
 
+## Chromium/Electron compatibility
+
+Profiles react to who is *holding* the camera, which is too late for the problem
+they are most needed for: an application that never lists the camera cannot
+start holding it. Chromium-based applications (Discord, Chrome, Brave, Slack,
+Signal, ...) do not enumerate V4L2 devices through GStreamer, and they
+routinely fail to list a loopback device that only advertises `NV12`; the same
+device advertising `YUYV` appears immediately.
+
+The daemon therefore also scans the process table — `/proc/<pid>/comm`, one
+small file per process, same user only, every two seconds, deliberately cheaper
+than the consumer scan. When a Chromium-family process appears, the output
+switches to `YUYV`; when the last one exits, the configured pixel format comes
+back. This runs through the same `apply_output` path as everything else, so the
+change is still deferred while an application is streaming.
+
+Precedence in `desired_output`: an explicitly pinned profile wins, then an
+automatic profile matching a current consumer, then the Chromium shim, then the
+base `[output]`. The shim is on by default (`[compatibility] chromium_yuyv`)
+because the failure it prevents is silent, and is toggled at runtime with
+`vcam compat on|off`. The reason for the current format is published in
+`Status::compatibility`, so `vcam status` and the GUI show *why* the format
+differs from the configuration instead of leaving the user to guess.
+
+## Device access
+
+`vcam-core::access` answers "can this process open the device, and if not, why"
+without privileges, and it distinguishes a reason from a symptom:
+
+- `Missing` — the node does not exist (module not loaded);
+- `NotInGroup` — the account is not in the group that owns the node;
+- `StaleSession` — the account *is* in the group per `/etc/group`, but the
+  process's own supplementary groups, read from `/proc/self/status`, do not
+  contain it. The session started before `usermod -aG` ran. `id` in a new shell
+  will disagree, which is exactly why this costs people hours;
+- `Denied` — mode or owner, e.g. `root:root 0600`.
+
+`vcam doctor` reports the classification plus the commands that fix it, and
+`vcamd` refuses to start with that explanation rather than letting GStreamer
+fail with `Element failed to change its state`, which is what a permission
+problem looks like from the pipeline's point of view. The same diagnosis is
+appended to output pipeline errors if access is lost while running.
+
 ## Watchdog and self-healing
 
 A small state machine runs every 250 ms on the controller thread and evaluates
