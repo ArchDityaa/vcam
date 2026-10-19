@@ -72,6 +72,16 @@ compositor-independent producer:
 - **Camera users** — `vcam consumers` lists the applications holding the device.
   Changing the output format while an application is streaming is deferred until
   the camera is free, which is what makes it safe to do at all.
+- **Chromium/Electron compatibility** — Discord, Chrome, Brave, Slack and friends
+  routinely fail to list a loopback device that only advertises `NV12`. The
+  daemon watches for those applications and advertises `YUYV` while any of them
+  is running, then restores the configured pixel format. `vcam compat off`
+  disables the shim.
+- **Access diagnosis** — when the device cannot be opened, `vcamd` and
+  `vcam doctor` say *why*: no `video` group membership, a session that started
+  before `usermod -aG video` (invisible to `id`, and it stops every application
+  in that session from seeing the camera), or a wrong device mode. The udev rule
+  carries `uaccess` so the active session user gets access without a re-login.
 - **Per-application profiles** — `[[profiles]]` entries pick an output format
   automatically based on who is using the camera.
 - **No root daemon** — the module is loaded at boot; the daemon runs as your
@@ -99,7 +109,15 @@ sudo usermod -aG video "$USER"    # then log out and back in
 
 The package installs `/usr/lib/modprobe.d/v4l2loopback.conf`,
 `/usr/lib/modules-load.d/v4l2loopback.conf` and the udev rule that grants the
-`video` group access to `/dev/video10`.
+`video` group access to `/dev/video10`. The rule also carries
+`TAG+="uaccess"`, so the user of the active desktop session gets access through
+systemd-logind without a re-login.
+
+> **Logging out matters.** A group change only reaches sessions that start
+> afterwards. Applications in the session that was already open when you ran
+> `usermod` keep the old credentials, cannot open the device, and quietly drop
+> `Virtual Camera` from their camera list. `vcam doctor` detects exactly this
+> case and prints the fix.
 
 ### From source
 
@@ -162,6 +180,7 @@ vcam consumers                           list applications using the camera
 vcam profile list                        list configured profiles
 vcam profile use NAME [--force]          apply a profile now (pins it)
 vcam profile auto on|off                 toggle automatic profile selection
+vcam compat on|off                       toggle the Chromium/Electron YUYV shim
 vcam status                              print daemon status
 vcam doctor                              run diagnostics
 vcam reload                              reload the configuration file
@@ -213,6 +232,13 @@ autostart = false
 log_level = "info"
 auto_profiles = false     # apply matching [[profiles]] automatically
 
+[compatibility]
+# Advertise YUYV while a Chromium/Electron application (Discord, Chrome,
+# Brave, Slack, ...) is running: those applications frequently fail to list a
+# loopback device that only offers NV12. The configured pixel format is
+# restored when they exit, and `vcam compat off` disables the shim.
+chromium_yuyv = true
+
 [watchdog]
 enabled = true
 max_rss_mb = 1024          # rebuild the pipeline above this memory use
@@ -222,7 +248,9 @@ max_recoveries = 5         # then exit so systemd restarts the daemon
 
 # Optional per-application output profiles. The first entry whose `match`
 # pattern matches a process holding the camera wins. Only the keys you set are
-# overridden; everything else falls back to [output].
+# overridden; everything else falls back to [output]. With the compatibility
+# shim above on, Discord and friends already get YUYV without a profile; use a
+# profile when you want more than the pixel format to change.
 [[profiles]]
 name = "discord"
 match = ["discord", "chrome", "chromium"]
@@ -296,11 +324,11 @@ IPC protocol, the preview format, the consumer scan, profiles and the watchdog.
 
 | Application | Notes |
 | --- | --- |
-| Chrome / Chromium | Works; camera list may need a page reload after the daemon starts. |
+| Chrome / Chromium | Works; the compatibility shim advertises `YUYV` for it, and the camera list may need a page reload after the daemon starts. |
 | Firefox | Works. |
 | Zoom | Works. |
 | Microsoft Teams | Works. |
-| Discord | Works. `YUYV` is recommended; the GUI no longer opens the device. |
+| Discord | Works. The daemon advertises `YUYV` automatically while Discord runs; the GUI no longer opens the device. |
 | OBS | Add as a **Video Capture Device**; select *Virtual Camera*. |
 | Cheese | Works. |
 | OpenCV | `cv2.VideoCapture("/dev/video10")` or by index. |
