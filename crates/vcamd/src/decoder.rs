@@ -1,9 +1,12 @@
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use gst::prelude::*;
 use gstreamer as gst;
 use gstreamer_app as gst_app;
 use vcam_core::{FitMode, OutputConfig};
+
+use crate::audio::AudioSpec;
 
 #[derive(Debug, Clone)]
 pub enum DecoderEvent {
@@ -17,6 +20,15 @@ pub struct Decoder {
     pipeline: gst::Pipeline,
     appsink: gst_app::AppSink,
     loop_video: bool,
+    /// Audio branch, created on the first decoded audio pad.
+    audio: Arc<Mutex<Option<AudioChain>>>,
+}
+
+/// The elements of the virtual microphone branch. Only the volume is needed
+/// after construction, to mute the short playback used for paused seeks.
+struct AudioChain {
+    convert: gst::Element,
+    volume: gst::Element,
 }
 
 impl Decoder {
@@ -25,6 +37,7 @@ impl Decoder {
         path: &Path,
         loop_video: bool,
         hw_decode: bool,
+        audio: Option<&AudioSpec>,
     ) -> Result<Self, String> {
         if !path.is_file() {
             return Err(format!("video file does not exist: {}", path.display()));
@@ -150,34 +163,40 @@ impl Decoder {
                 .map_err(|error| format!("failed to link decode chain: {error}"))?;
         }
 
-        // decodebin3 exposes decoded pads dynamically. Connect the first video
-        // pad to videoconvert and ignore audio/subtitle pads.
+        // decodebin3 exposes decoded pads dynamically. Video pads feed the
+        // output chain; the first audio pad creates the microphone branch.
+        //
+        // The branch is built lazily on purpose: a sink that never receives a
+        // buffer would also never receive EOS, so a video-only file would make
+        // the pipeline wait forever and looping would stop working.
         let convert_weak = convert.downgrade();
+        let pipeline_weak = pipeline.downgrade();
+        let audio_state = Arc::new(Mutex::new(None::<AudioChain>));
+        let audio_state_for_pads = audio_state.clone();
+        let audio_spec = audio.cloned();
         decodebin.connect_pad_added(move |_decodebin, source_pad| {
-            let Some(convert) = convert_weak.upgrade() else {
-                return;
-            };
             let caps = source_pad
                 .current_caps()
                 .unwrap_or_else(|| source_pad.query_caps(None));
-            let is_video = caps
+            let name = caps
                 .structure(0)
-                .map(|structure| structure.name().as_str().starts_with("video/"))
-                .unwrap_or(true);
-            if !is_video {
-                return;
-            }
-            let Some(sink_pad) = convert.static_pad("sink") else {
-                return;
-            };
-            if sink_pad.is_linked() {
-                return;
-            }
-            if source_pad.link(&sink_pad).is_err() {
-                tracing::warn!(
-                    pad = source_pad.name().as_str(),
-                    "failed to link decoded video pad"
-                );
+                .map(|structure| structure.name().to_string())
+                .unwrap_or_default();
+            if name.is_empty() || name.starts_with("video/") {
+                // A pad without caps is treated as video, matching the previous
+                // behaviour; decodebin3 normally supplies caps in `pad-added`.
+                let Some(convert) = convert_weak.upgrade() else {
+                    return;
+                };
+                link_video_pad(&convert, source_pad);
+            } else if name.starts_with("audio/") {
+                let Some(spec) = audio_spec.as_ref() else {
+                    return;
+                };
+                let Some(pipeline) = pipeline_weak.upgrade() else {
+                    return;
+                };
+                link_audio_pad(&pipeline, source_pad, spec, &audio_state_for_pads);
             }
         });
 
@@ -189,11 +208,33 @@ impl Decoder {
             pipeline,
             appsink,
             loop_video,
+            audio: audio_state,
         })
     }
 
     pub fn loop_video(&self) -> bool {
         self.loop_video
+    }
+
+    /// Mute or unmute the microphone branch. Used while a paused seek runs the
+    /// pipeline briefly to produce a frame, so no audio snippet leaks out.
+    pub fn set_audio_muted(&self, muted: bool) {
+        let Ok(state) = self.audio.lock() else {
+            return;
+        };
+        if let Some(chain) = state.as_ref() {
+            chain
+                .volume
+                .set_property("volume", if muted { 0.0 } else { 1.0 });
+        }
+    }
+
+    /// Whether the source actually provided an audio pad.
+    pub fn has_audio(&self) -> bool {
+        self.audio
+            .lock()
+            .map(|state| state.is_some())
+            .unwrap_or(false)
     }
 
     pub fn set_loop(&mut self, loop_video: bool) {
@@ -301,4 +342,124 @@ impl Drop for Decoder {
     fn drop(&mut self) {
         self.stop();
     }
+}
+
+fn make_element(factory: &str, name: &str) -> Result<gst::Element, String> {
+    gst::ElementFactory::make(factory)
+        .name(name)
+        .build()
+        .map_err(|error| format!("failed to create {factory}: {error}"))
+}
+
+fn link_video_pad(convert: &gst::Element, source_pad: &gst::Pad) {
+    let Some(sink_pad) = convert.static_pad("sink") else {
+        return;
+    };
+    if sink_pad.is_linked() {
+        return;
+    }
+    if source_pad.link(&sink_pad).is_err() {
+        tracing::warn!(
+            pad = source_pad.name().as_str(),
+            "failed to link decoded video pad"
+        );
+    }
+}
+
+fn link_audio_pad(
+    pipeline: &gst::Pipeline,
+    source_pad: &gst::Pad,
+    spec: &AudioSpec,
+    state: &Mutex<Option<AudioChain>>,
+) {
+    let Ok(mut state) = state.lock() else {
+        return;
+    };
+    if let Some(chain) = state.as_ref() {
+        // decodebin3 can expose a new audio pad after a seek; attach it to the
+        // branch that already exists instead of creating a second one.
+        link_audio_source(&chain.convert, source_pad);
+        return;
+    }
+    match build_audio_chain(pipeline, spec) {
+        Ok(chain) => {
+            link_audio_source(&chain.convert, source_pad);
+            *state = Some(chain);
+            tracing::info!(
+                sink = %spec.sink,
+                rate = spec.sample_rate,
+                channels = spec.channels,
+                "virtual microphone branch attached"
+            );
+        }
+        Err(error) => {
+            tracing::warn!(%error, "failed to build the audio branch; continuing without audio");
+        }
+    }
+}
+
+fn link_audio_source(convert: &gst::Element, source_pad: &gst::Pad) {
+    let Some(sink_pad) = convert.static_pad("sink") else {
+        return;
+    };
+    if sink_pad.is_linked() {
+        return;
+    }
+    if source_pad.link(&sink_pad).is_err() {
+        tracing::warn!(
+            pad = source_pad.name().as_str(),
+            "failed to link decoded audio pad"
+        );
+    }
+}
+
+fn build_audio_chain(pipeline: &gst::Pipeline, spec: &AudioSpec) -> Result<AudioChain, String> {
+    let convert = make_element("audioconvert", "vcam-audio-convert")?;
+    let resample = make_element("audioresample", "vcam-audio-resample")?;
+
+    let caps = gst::Caps::builder("audio/x-raw")
+        .field("format", "S16LE")
+        .field("rate", spec.sample_rate as i32)
+        .field("channels", spec.channels as i32)
+        .field("layout", "interleaved")
+        .build();
+    let capsfilter = make_element("capsfilter", "vcam-audio-caps")?;
+    capsfilter.set_property("caps", &caps);
+
+    let queue = make_element("queue", "vcam-audio-queue")?;
+    queue.set_property("max-size-buffers", 0u32);
+    queue.set_property("max-size-bytes", 0u32);
+    queue.set_property("max-size-time", 500_000_000u64);
+
+    let volume = make_element("volume", "vcam-audio-volume")?;
+    volume.set_property("volume", 1.0f64);
+
+    let sink = make_element("pulsesink", "vcam-audio-sink")?;
+    sink.set_property("device", spec.sink.as_str());
+    sink.set_property("client-name", "vcam");
+    sink.set_property("sync", true);
+    // The camera pipeline keeps using the system clock; letting the audio sink
+    // provide the pipeline clock would change how decoded frames are paced.
+    sink.set_property("provide-clock", false);
+    // Never make the whole pipeline wait for the audio device.
+    sink.set_property("async", false);
+
+    let chain = [&convert, &resample, &capsfilter, &queue, &volume, &sink];
+    for element in chain {
+        pipeline
+            .add(element)
+            .map_err(|error| format!("failed to add {}: {error}", element.name()))?;
+    }
+    for pair in chain.windows(2) {
+        pair[0]
+            .link(pair[1])
+            .map_err(|error| format!("failed to link the audio chain: {error}"))?;
+    }
+    for element in chain {
+        element
+            .sync_state_with_parent()
+            .map_err(|error| format!("failed to start {}: {error}", element.name()))?;
+    }
+
+    Ok(AudioChain { convert, volume })
 }

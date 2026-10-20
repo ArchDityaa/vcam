@@ -135,6 +135,50 @@ If the camera is still missing, check in this order:
    Discord caches the device list aggressively; a full restart is sometimes the
    only way to clear it.
 
+## The virtual microphone does not appear, or is silent
+
+`vcam audio status` (and the **Audio** tab in the GUI) reports the sink and
+source names, the backend and any error:
+
+```sh
+vcam audio status
+pactl info
+pactl list short sources | grep vcam_mic
+```
+
+If the source is missing, turn the companion on again:
+
+```sh
+vcam audio on
+```
+
+If that reports `pactl was not found`, install the control client
+(`sudo apt install pulseaudio-utils`); PipeWire also needs `pipewire-pulse` for
+the PulseAudio compatibility server. The camera itself does not need either, so
+a missing sound server never prevents playback.
+
+**It is silent while nothing is playing, and for sources without an audio
+track.** The microphone stays connected on purpose, so applications can select
+it before playback starts and keep it selected across sources. It is also silent
+while paused, and the short pipeline run used by paused seeks is muted by
+design.
+
+If the node exists but applications do not list it, restart the application (or
+reload the page in Chrome, or use the refresh button in Discord's voice
+settings); many applications enumerate microphones only at startup.
+
+If a crashed daemon left modules behind with names from an older configuration,
+adopt or remove them instead of stacking duplicates:
+
+```sh
+pactl list short modules | grep -E 'null-sink|remap-source'
+vcam audio off && vcam audio on
+```
+
+After a sound-server restart (for example a PipeWire upgrade) the modules are
+gone even though the daemon is still running. `vcam audio on` recreates them
+without restarting the daemon; `systemctl --user restart vcamd` also works.
+
 ## `not-negotiated` or `pipeline doesn't want to preroll`
 
 This means the caps the daemon offers are not a subset of what `v4l2sink`

@@ -8,7 +8,9 @@
 
 `vcam` feeds a video into a [v4l2loopback](https://github.com/umlaeute/v4l2loopback)
 device so that ordinary applications — Chrome, Firefox, Zoom, Teams, Discord,
-OBS, Cheese, OpenCV — see it as a normal webcam.
+OBS, Cheese, OpenCV — see it as a normal webcam. It can also expose the source's
+audio track as a **virtual microphone**, so a call sees a matching camera and
+microphone pair.
 
 It is written in Rust and GStreamer. A small always-on daemon (`vcamd`) holds
 the loopback device open and writes frames to it. A command line client (`vcam`)
@@ -77,6 +79,12 @@ compositor-independent producer:
   daemon watches for those applications and advertises `YUYV` while any of them
   is running, then restores the configured pixel format. `vcam compat off`
   disables the shim.
+- **Virtual microphone** — the source's audio track is played into a
+  PulseAudio/PipeWire null sink and exposed as a remapped source called
+  **Virtual Microphone**. It follows playback exactly: pause, seek, looping and
+  stop all apply to sound and video together, and the short pipeline run used
+  for paused seeks is muted. Toggle it with `vcam audio on|off` or from the
+  GUI's **Audio** tab.
 - **Access diagnosis** — when the device cannot be opened, `vcamd` and
   `vcam doctor` say *why*: no `video` group membership, a session that started
   before `usermod -aG video` (invisible to `id`, and it stops every application
@@ -92,6 +100,9 @@ compositor-independent producer:
 - Ubuntu 24.04 / Debian 13 (or newer), 64-bit.
 - `v4l2loopback` kernel module.
 - GStreamer 1.24 with base, good, bad and libav plugins.
+- A PulseAudio or PipeWire server with `pactl` for the virtual microphone
+  (`pulseaudio-utils`, or `pipewire-pulse` plus `pulseaudio-utils`). The camera
+  works without one; the microphone is then reported as unavailable.
 - For the GUI: GTK 4.14 and libadwaita 1.5.
 - For the `video` group access rule: your user in the `video` group.
 
@@ -102,7 +113,7 @@ compositor-independent producer:
 Download the `.deb` from the [latest release](https://github.com/ArchDityaa/vcam/releases/latest):
 
 ```sh
-sudo apt install ./vcam_0.2.0_amd64.deb
+sudo apt install ./vcam_0.3.0_amd64.deb
 sudo modprobe v4l2loopback        # or reboot, modules-load.d loads it
 sudo usermod -aG video "$USER"    # then log out and back in
 ```
@@ -135,7 +146,7 @@ Or build the package yourself:
 
 ```sh
 packaging/build-deb.sh
-sudo apt install ./target/deb/vcam_0.2.0_amd64.deb
+sudo apt install ./target/deb/vcam_0.3.0_amd64.deb
 ```
 
 ## Set up the module
@@ -160,7 +171,9 @@ vcamd &                           # or: systemctl --user start vcamd
 vcam start --source movie.mp4     # start feeding the camera
 ```
 
-Then pick **Virtual Camera** in any application's camera settings.
+Then pick **Virtual Camera** in any application's camera settings and
+**Virtual Microphone** in its microphone settings. The microphone exists while
+`vcamd` runs and stays silent while nothing is playing.
 
 ## Command line
 
@@ -181,6 +194,7 @@ vcam profile list                        list configured profiles
 vcam profile use NAME [--force]          apply a profile now (pins it)
 vcam profile auto on|off                 toggle automatic profile selection
 vcam compat on|off                       toggle the Chromium/Electron YUYV shim
+vcam audio on|off|status                 toggle or inspect the virtual microphone
 vcam status                              print daemon status
 vcam doctor                              run diagnostics
 vcam reload                              reload the configuration file
@@ -194,8 +208,9 @@ All commands accept `--socket PATH` to talk to a daemon on a different socket.
 Run `vcam-gui` (or launch **Virtual Camera** from your application menu). It
 shows a live preview and lets you choose a file, play/pause/stop, seek, toggle
 looping, change the output format, see who is using the camera, and run the
-doctor. It is an IPC client: you can use it alongside the CLI and both stay in
-sync.
+doctor. The **Audio** tab turns the virtual microphone on or off and shows the
+node names and the sound server it is using. The GUI is an IPC client: you can
+use it alongside the CLI and both stay in sync.
 
 ![vcam-gui demo](docs/assets/demo.gif)
 
@@ -227,6 +242,17 @@ rotate = 0
 path = "/home/you/movie.mp4"
 loop_video = true
 autostart = false
+
+# Virtual microphone: the source's audio track is played into a null sink and
+# exposed as a remapped source. Applications see `label`. On by default; the
+# camera keeps working when no sound server is reachable.
+[audio]
+enabled = true
+sink_name = "vcam_sink"
+source_name = "vcam_mic"
+label = "Virtual Microphone"
+sample_rate = 48000
+channels = 2
 
 [daemon]
 log_level = "info"
@@ -298,6 +324,12 @@ flowchart LR
     sink --> dev[/dev/video10/]
     dev --> apps[Chrome · Firefox · Zoom<br/>Teams · Discord · OBS]
 
+    dec --> aconv[audioconvert<br/>audioresample]
+    aconv --> asink[pulsesink]
+    asink --> nullsink[(vcam_sink)]
+    nullsink --> mic[vcam_mic<br/>remapped source]
+    mic --> callapps[Zoom · Teams · Discord]
+
     cli[vcam CLI] -. Unix socket .-> ctl[control server]
     gui[vcam-gui] -. Unix socket .-> ctl
     ctl --> src
@@ -308,14 +340,19 @@ flowchart LR
         src
         queue
         sink
+        aconv
+        asink
         ctl
     end
 ```
 
 The daemon starts the output pipeline as soon as it owns the device and keeps it
 running with a black placeholder. Playback attaches a decoder pipeline that
-produces frames in the exact caps the output expects. The GUI never opens the
-device; the daemon publishes a small preview frame that the GUI reads instead.
+produces frames in the exact caps the output expects. When audio is enabled the
+same decoder grows a second branch that plays into a PulseAudio/PipeWire null
+sink; the microphone applications see is a remapped source on that sink's
+monitor. The GUI never opens the device; the daemon publishes a small preview
+frame that the GUI reads instead.
 
 See [docs/architecture.md](docs/architecture.md) for the threading model, the
 IPC protocol, the preview format, the consumer scan, profiles and the watchdog.
@@ -341,12 +378,17 @@ appear.
 ```sh
 cargo test --workspace           # unit tests
 tests/integration.sh             # end-to-end against /dev/video10
+tests/audio.sh                   # virtual microphone against the sound server
 DURATION=1800 tests/stability.sh # 30-minute 1080p30 soak test
 ```
 
-The integration and stability scripts start a private daemon on a temporary
-socket, so they do not disturb a `vcamd` you are already running. They do
-require the module to be loaded and the device node to exist.
+The integration, audio and stability scripts start a private daemon on a
+temporary socket (the audio test also uses private module names), so they do not
+disturb a `vcamd` you are already running — but they do need the device itself,
+so stop that daemon first. They require the module to be loaded and the device
+node to exist; the audio test additionally needs `pactl`, `parec`, `python3` and
+a reachable PulseAudio/PipeWire server, and skips itself when any of those are
+missing.
 
 ## Roadmap
 
@@ -356,6 +398,7 @@ require the module to be loaded and the device node to exist.
 - [x] Consumer detection and deferred output changes
 - [x] Per-application profiles
 - [x] Watchdog and self-healing
+- [x] Virtual microphone companion (PulseAudio/PipeWire null sink)
 - [x] `.deb`, systemd, udev, man pages
 - [ ] Flatpak package
 - [ ] Playlist / multi-source queue
@@ -367,6 +410,18 @@ require the module to be loaded and the device node to exist.
 **Does it work without a desktop session?**
 Yes. `vcamd` only needs a user systemd session (or a plain terminal) and the
 `video` group.
+
+**Why is the virtual microphone silent?**
+It only carries the source's own audio track. While nothing is playing, and for
+sources without audio, it stays connected but silent — that is deliberate, so
+applications can select it before playback starts and keep it selected across
+sources. Check `vcam audio status`; it reports the node names and any error.
+
+**Do I need PipeWire for the microphone?**
+No. The companion uses `pactl` with a null sink plus a remapped source, which
+works the same on PipeWire's PulseAudio compatibility server and on a plain
+PulseAudio server. If no sound server is reachable, the camera keeps working and
+the microphone reports that it is unavailable.
 
 **Why does the preview keep working while Discord uses the camera?**
 The preview is rendered by the daemon and published as a small file. A second

@@ -13,6 +13,7 @@ use vcam_core::{
     PixelFormat, PlaybackState, Status,
 };
 
+use crate::audio::{is_audio_error, AudioBridge};
 use crate::decoder::{Decoder, DecoderEvent};
 use crate::frame;
 use crate::output::Output;
@@ -116,6 +117,8 @@ struct Controller {
     next_compat_poll: Instant,
     /// Whether the Chromium/Electron `YUYV` shim may change the output.
     compat_shim: bool,
+    /// Virtual microphone companion.
+    audio: AudioBridge,
     shutdown_notify: Arc<Notify>,
 }
 
@@ -205,6 +208,7 @@ impl Controller {
 
         let output = Output::new(&device, &config.output)?;
         let black_frame = frame::black_frame(&config.output);
+        let audio = AudioBridge::new(&config.audio);
         let status = Status {
             state: PlaybackState::Idle,
             source: None,
@@ -216,6 +220,7 @@ impl Controller {
             label: config.device.label.clone(),
             message: None,
             version: env!("CARGO_PKG_VERSION").to_string(),
+            audio: None,
             consumers: Vec::new(),
             pending: None,
             profile: None,
@@ -254,6 +259,7 @@ impl Controller {
             chromium_apps: Vec::new(),
             next_compat_poll: Instant::now(),
             compat_shim,
+            audio,
             shutdown_notify,
         };
 
@@ -327,6 +333,7 @@ impl Controller {
         if let Some(decoder) = self.decoder.take() {
             decoder.stop();
         }
+        self.audio.disable();
         self.output.stop();
         Ok(())
     }
@@ -401,6 +408,7 @@ impl Controller {
                     .decoder
                     .as_ref()
                     .ok_or_else(|| "no active source".to_string())?;
+                decoder.set_audio_muted(false);
                 decoder.play()?;
                 self.seek_preview = None;
                 self.status.state = PlaybackState::Playing;
@@ -417,7 +425,10 @@ impl Controller {
                 if self.status.state == PlaybackState::Paused {
                     // A paused pipeline does not render the prerolled frame
                     // through appsink, so run it briefly to obtain a frame at
-                    // the requested position, then pause again.
+                    // the requested position, then pause again. The microphone
+                    // is muted for that window, otherwise every seek would be
+                    // audible as a short burst.
+                    decoder.set_audio_muted(true);
                     decoder.play()?;
                     self.seek_preview = Some(SeekPreview {
                         target_ms: position_ms,
@@ -541,6 +552,20 @@ impl Controller {
                 self.emit_status();
                 self.status_value()
             }
+            Command::SetAudio { enabled } => {
+                self.config.audio.enabled = enabled;
+                if enabled {
+                    self.audio.enable();
+                } else {
+                    self.audio.disable();
+                }
+                // Rebuild the decoder so the microphone branch is added or
+                // removed; the position is preserved by the rebuild.
+                let result = self.rebuild_decoder();
+                self.emit_status();
+                result?;
+                self.status_value()
+            }
             Command::Profiles => {
                 let profiles: Vec<Value> = self
                     .config
@@ -581,6 +606,7 @@ impl Controller {
             path,
             loop_video,
             self.config.source.hw_decode,
+            self.audio.spec().as_ref(),
         )?;
         decoder.play()?;
 
@@ -604,6 +630,64 @@ impl Controller {
         self.status.message = None;
         self.output_error = None;
         self.emit_status();
+        Ok(())
+    }
+
+    /// Rebuild the decoder in place, preserving source, position and
+    /// paused/playing state. Used when the audio branch has to be attached or
+    /// detached without interrupting the camera.
+    fn rebuild_decoder(&mut self) -> Result<(), String> {
+        let Some(source) = self.status.source.clone() else {
+            return Ok(());
+        };
+        let position = self.status.position_ms;
+        let was_playing = self.status.state == PlaybackState::Playing;
+        let was_paused = self.status.state == PlaybackState::Paused;
+
+        if let Some(decoder) = self.decoder.take() {
+            decoder.stop();
+        }
+        self.seek_preview = None;
+
+        let path = PathBuf::from(source);
+        let loop_video = self.config.source.loop_video;
+        let built = (|| -> Result<Decoder, String> {
+            let decoder = Decoder::new(
+                &self.config.output,
+                &path,
+                loop_video,
+                self.config.source.hw_decode,
+                self.audio.spec().as_ref(),
+            )?;
+            if was_paused {
+                decoder.pause()?;
+            } else if was_playing {
+                decoder.play()?;
+            }
+            if position > 0 {
+                let _ = decoder.seek(position);
+            }
+            Ok(decoder)
+        })();
+        let decoder = match built {
+            Ok(decoder) => decoder,
+            Err(error) => {
+                self.status.state = PlaybackState::Error;
+                self.status.message = Some(error.clone());
+                return Err(error);
+            }
+        };
+
+        self.decoder = Some(decoder);
+        self.status.source = Some(path.display().to_string());
+        self.status.state = if was_paused {
+            PlaybackState::Paused
+        } else if was_playing {
+            PlaybackState::Playing
+        } else {
+            PlaybackState::Idle
+        };
+        self.status.message = None;
         Ok(())
     }
 
@@ -636,6 +720,7 @@ impl Controller {
                         self.fail(error);
                         return;
                     }
+                    decoder.set_audio_muted(false);
                 }
                 self.emit_status();
             } else {
@@ -921,7 +1006,24 @@ impl Controller {
                         self.emit_status();
                     }
                 }
-                DecoderEvent::Error(error) => self.fail(error),
+                DecoderEvent::Error(error) => {
+                    if self.audio.active() && is_audio_error(&error) {
+                        // A microphone failure must not take the camera down:
+                        // drop the audio branch, keep the device running and say
+                        // why the microphone went quiet.
+                        tracing::warn!(%error, "audio branch failed; continuing without audio");
+                        self.audio.disable();
+                        self.audio
+                            .fail(format!("audio disabled after a pipeline error: {error}"));
+                        if let Err(rebuild) = self.rebuild_decoder() {
+                            self.fail(rebuild);
+                        } else {
+                            self.emit_status();
+                        }
+                    } else {
+                        self.fail(error);
+                    }
+                }
             }
         }
     }
@@ -1039,7 +1141,13 @@ impl Controller {
         if let Some(source) = source {
             let path = PathBuf::from(source);
             let loop_video = self.config.source.loop_video;
-            match Decoder::new(&new_output, &path, loop_video, self.config.source.hw_decode) {
+            match Decoder::new(
+                &new_output,
+                &path,
+                loop_video,
+                self.config.source.hw_decode,
+                self.audio.spec().as_ref(),
+            ) {
                 Ok(decoder) => {
                     if was_paused {
                         decoder.pause()?;
@@ -1076,6 +1184,8 @@ impl Controller {
         if new_config.device.device_path() != self.device {
             return Err("changing the device requires restarting vcamd".to_string());
         }
+        let audio_changed = new_config.audio != self.config.audio;
+        self.config.audio = new_config.audio.clone();
 
         self.config.source = new_config.source;
         self.config.daemon = new_config.daemon;
@@ -1113,6 +1223,15 @@ impl Controller {
             }
         }
 
+        if audio_changed {
+            self.audio.reconfigure(&self.config.audio);
+            if self.status.source.is_some() {
+                if let Err(error) = self.rebuild_decoder() {
+                    self.status.message = Some(error);
+                }
+            }
+        }
+
         self.status.loop_video = self.config.source.loop_video;
         self.emit_status();
         self.status_value()
@@ -1128,11 +1247,26 @@ impl Controller {
     }
 
     fn status_value(&self) -> Result<Value, String> {
-        serde_json::to_value(&self.status).map_err(|error| error.to_string())
+        serde_json::to_value(self.status_snapshot()).map_err(|error| error.to_string())
     }
 
     fn emit_status(&self) {
-        let _ = self.events.send(Event::status(&self.status));
+        let _ = self.events.send(Event::status(&self.status_snapshot()));
+    }
+
+    /// The status plus the live audio bridge state. Computing it on demand
+    /// keeps the reported microphone in sync with the modules that are
+    /// actually loaded in the sound server.
+    fn status_snapshot(&self) -> Status {
+        let mut status = self.status.clone();
+        let audio_playing = status.state == PlaybackState::Playing
+            && self
+                .decoder
+                .as_ref()
+                .map(|decoder| decoder.has_audio())
+                .unwrap_or(false);
+        status.audio = Some(self.audio.status(self.config.audio.enabled, audio_playing));
+        status
     }
 }
 

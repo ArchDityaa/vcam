@@ -69,15 +69,16 @@ Section: video
 Priority: optional
 Architecture: $arch
 Depends: libc6, libgstreamer1.0-0, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-libav, libgtk-4-1, libadwaita-1-0
-Recommends: v4l2loopback-dkms, gstreamer1.0-tools, v4l-utils
+Recommends: v4l2loopback-dkms, gstreamer1.0-tools, v4l-utils, pulseaudio-utils
 Maintainer: ArchDityaa <ArchDityaa@users.noreply.github.com>
 Description: Virtual camera that feeds a video into a V4L2 device
  vcam keeps a v4l2loopback device open with a userspace GStreamer
  producer so that Chrome, Firefox, Zoom, Teams, Discord, OBS and
  OpenCV see a normal webcam. It supports looping, hot swapping the
  source, pause/resume/seek, a black idle placeholder, and a stable
- output resolution and frame rate. Ships a daemon, a CLI and a
- GTK4 control panel.
+ output resolution and frame rate. The source's audio track can be exposed
+ as a matching virtual microphone through a PulseAudio or PipeWire null sink.
+ Ships a daemon, a CLI and a GTK4 control panel.
 EOF
 
 cat > "$stage/DEBIAN/postinst" <<'EOF'

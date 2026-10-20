@@ -38,6 +38,8 @@ pub struct Config {
     pub output: OutputConfig,
     pub source: SourceConfig,
     pub daemon: DaemonConfig,
+    /// Virtual microphone companion, fed from the audio track of the source.
+    pub audio: AudioConfig,
     pub watchdog: WatchdogConfig,
     /// Compatibility shims for applications that do not follow the V4L2
     /// conventions to the letter.
@@ -118,6 +120,7 @@ impl Config {
     pub fn validate(&self) -> Result<(), String> {
         self.device.validate()?;
         self.output.validate()?;
+        self.audio.validate()?;
         if self.source.loop_video {
             // no-op: documents intent, loop is always valid
         }
@@ -366,6 +369,79 @@ impl Default for SourceConfig {
     }
 }
 
+/// Virtual microphone companion.
+///
+/// The daemon plays the source's audio track into a PulseAudio/PipeWire null
+/// sink and exposes that sink's monitor as a remapped source, which
+/// applications list as an ordinary microphone. It follows playback exactly:
+/// pause, seek, looping and stopping all apply to video and audio together.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AudioConfig {
+    /// Load the virtual microphone together with the daemon.
+    pub enabled: bool,
+    /// PulseAudio sink the pipeline plays into.
+    pub sink_name: String,
+    /// Source applications see as a microphone.
+    pub source_name: String,
+    /// Description shown in application device lists.
+    pub label: String,
+    pub sample_rate: u32,
+    pub channels: u32,
+}
+
+impl Default for AudioConfig {
+    fn default() -> Self {
+        Self {
+            // On by default: the camera is most useful with sound, and the
+            // bridge degrades to a warning when no audio server is reachable.
+            enabled: true,
+            sink_name: "vcam_sink".to_string(),
+            source_name: "vcam_mic".to_string(),
+            label: "Virtual Microphone".to_string(),
+            sample_rate: 48_000,
+            channels: 2,
+        }
+    }
+}
+
+impl AudioConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        for (key, value) in [
+            ("audio.sink_name", &self.sink_name),
+            ("audio.source_name", &self.source_name),
+        ] {
+            if value.trim().is_empty() {
+                return Err(format!("{key} must not be empty"));
+            }
+            if !value
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+            {
+                return Err(format!(
+                    "{key} may only contain ASCII letters, digits, '_', '.' and '-'"
+                ));
+            }
+        }
+        if self.label.trim().is_empty() {
+            return Err("audio.label must not be empty".into());
+        }
+        if self.label.chars().any(char::is_control) {
+            return Err("audio.label must not contain control characters".into());
+        }
+        if self.sink_name == self.source_name {
+            return Err("audio.sink_name and audio.source_name must differ".into());
+        }
+        if !(8_000..=192_000).contains(&self.sample_rate) {
+            return Err("audio.sample_rate must be between 8000 and 192000".into());
+        }
+        if !(1..=2).contains(&self.channels) {
+            return Err("audio.channels must be 1 or 2".into());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DaemonConfig {
@@ -572,6 +648,47 @@ mod tests {
         // The Chromium shim is on by default so that Discord/Chrome users do
         // not have to discover the YUYV requirement themselves.
         assert!(cfg.compatibility.chromium_yuyv);
+    }
+
+    #[test]
+    fn audio_defaults_are_on() {
+        let cfg = Config::default();
+        cfg.validate().unwrap();
+        assert!(cfg.audio.enabled);
+        assert_eq!(cfg.audio.sink_name, "vcam_sink");
+        assert_eq!(cfg.audio.source_name, "vcam_mic");
+        assert_eq!(cfg.audio.label, "Virtual Microphone");
+    }
+
+    #[test]
+    fn serializes_the_audio_section() {
+        let text = toml::to_string(&Config::default()).unwrap();
+        assert!(text.contains("[audio]"));
+        assert!(text.contains("enabled = true"));
+        assert!(text.contains("sink_name = \"vcam_sink\""));
+    }
+
+    #[test]
+    fn validates_audio_names_and_rates() {
+        let mut cfg = Config::default();
+        cfg.audio.sink_name = "bad name".into();
+        assert!(cfg.validate().is_err());
+
+        let mut cfg = Config::default();
+        cfg.audio.source_name = cfg.audio.sink_name.clone();
+        assert!(cfg.validate().is_err());
+
+        let mut cfg = Config::default();
+        cfg.audio.sample_rate = 1;
+        assert!(cfg.validate().is_err());
+
+        let mut cfg = Config::default();
+        cfg.audio.channels = 6;
+        assert!(cfg.validate().is_err());
+
+        let mut cfg = Config::default();
+        cfg.audio.label = "bad\nlabel".into();
+        assert!(cfg.validate().is_err());
     }
 
     #[test]
