@@ -184,6 +184,55 @@ pub fn run(config: &Config, device: &Path) -> DoctorReport {
         ));
     }
 
+    // The virtual microphone is best effort: a missing sound server must not
+    // make the camera look broken, so the backend check is informational and
+    // only the GStreamer elements it would need are hard requirements.
+    if config.audio.enabled {
+        match vcam_core::audio::server_info() {
+            Ok(info) => {
+                let backend = vcam_core::audio::parse_backend(&info);
+                let present =
+                    vcam_core::audio::source_exists(&config.audio.source_name).unwrap_or(false);
+                checks.push(Check::new(
+                    "audio backend",
+                    true,
+                    format!(
+                        "{backend} reachable; '{}' is {}",
+                        config.audio.source_name,
+                        if present {
+                            "loaded"
+                        } else {
+                            "not loaded yet (start vcamd or run: vcam audio on)"
+                        }
+                    ),
+                ));
+            }
+            Err(error) => checks.push(Check::new(
+                "audio backend",
+                true,
+                format!("unavailable ({error}); the camera is unaffected"),
+            )),
+        }
+        for element in ["pulsesink", "audioconvert", "audioresample", "volume"] {
+            let found = gst::ElementFactory::find(element).is_some();
+            checks.push(Check::new(
+                format!("gstreamer element {element}"),
+                found,
+                if found {
+                    "available".to_string()
+                } else {
+                    "missing; install the appropriate gstreamer1.0-plugins package".to_string()
+                },
+            ));
+        }
+    } else {
+        checks.push(Check::new(
+            "audio companion",
+            true,
+            "disabled in the configuration".to_string(),
+        ));
+    }
+
     let ok = checks.iter().all(|check| check.ok);
     DoctorReport { ok, checks }
 }

@@ -79,9 +79,12 @@ fn build_ui(app: &gtk::Application) {
         .build();
 
     let header = adw::HeaderBar::new();
-    let title = gtk::Label::new(Some("Virtual Camera"));
-    title.add_css_class("title");
-    header.set_title_widget(Some(&title));
+    let stack = adw::ViewStack::new();
+    let switcher = adw::ViewSwitcher::builder()
+        .policy(adw::ViewSwitcherPolicy::Wide)
+        .build();
+    switcher.set_stack(Some(&stack));
+    header.set_title_widget(Some(&switcher));
 
     // Preview -------------------------------------------------------------
     let picture = gtk::Picture::new();
@@ -270,9 +273,59 @@ fn build_ui(app: &gtk::Application) {
         .hscrollbar_policy(gtk::PolicyType::Never)
         .build();
 
+    // Virtual microphone --------------------------------------------------
+    let audio_group = adw::PreferencesGroup::builder()
+        .title("Virtual microphone")
+        .description("Applications see this as a normal microphone")
+        .build();
+
+    let audio_switch = adw::SwitchRow::builder()
+        .title("Enable microphone")
+        .subtitle("Feed the source's audio track into a virtual microphone")
+        .active(config.audio.enabled)
+        .build();
+    audio_group.add(&audio_switch);
+
+    let audio_device_row = adw::ActionRow::builder()
+        .title("Device")
+        .subtitle("Virtual Microphone")
+        .build();
+    audio_group.add(&audio_device_row);
+
+    let audio_server_row = adw::ActionRow::builder()
+        .title("Audio server")
+        .subtitle("Detecting…")
+        .build();
+    audio_group.add(&audio_server_row);
+
+    let audio_note = gtk::Label::new(Some(
+        "Pick “Virtual Microphone” in the microphone settings of your application. \
+         While nothing is playing, the microphone stays connected and silent.",
+    ));
+    audio_note.set_wrap(true);
+    audio_note.set_xalign(0.0);
+    audio_note.add_css_class("dim-label");
+
+    let audio_content = gtk::Box::new(gtk::Orientation::Vertical, 18);
+    audio_content.set_margin_top(18);
+    audio_content.set_margin_bottom(18);
+    audio_content.set_margin_start(18);
+    audio_content.set_margin_end(18);
+    audio_content.append(&audio_group);
+    audio_content.append(&audio_note);
+
+    let audio_page = gtk::ScrolledWindow::builder()
+        .child(&audio_content)
+        .vexpand(true)
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .build();
+
+    stack.add_titled(&scrolled, Some("camera"), "Camera");
+    stack.add_titled(&audio_page, Some("audio"), "Audio");
+
     let toolbar = adw::ToolbarView::new();
     toolbar.add_top_bar(&header);
-    toolbar.set_content(Some(&scrolled));
+    toolbar.set_content(Some(&stack));
     window.set_content(Some(&toolbar));
 
     // Actions -------------------------------------------------------------
@@ -427,6 +480,18 @@ fn build_ui(app: &gtk::Application) {
             let _ = worker.send(WorkerCommand::Send(Command::Doctor));
         });
     }
+    {
+        let worker = worker.clone();
+        let updating = updating.clone();
+        audio_switch.connect_active_notify(move |row| {
+            if updating.get() {
+                return;
+            }
+            let _ = worker.send(WorkerCommand::Send(Command::SetAudio {
+                enabled: row.is_active(),
+            }));
+        });
+    }
 
     // Periodic UI refresh -------------------------------------------------
     {
@@ -451,6 +516,9 @@ fn build_ui(app: &gtk::Application) {
         let mirror_row = mirror_row.clone();
         let consumers_row = consumers_row.clone();
         let profile_row = profile_row.clone();
+        let audio_switch = audio_switch.clone();
+        let audio_device_row = audio_device_row.clone();
+        let audio_server_row = audio_server_row.clone();
 
         glib::timeout_add_local(Duration::from_millis(150), move || {
             if let Some(frame) = preview_frame.lock().ok().and_then(|mut guard| guard.take()) {
@@ -562,6 +630,39 @@ fn build_ui(app: &gtk::Application) {
                     _ => 0,
                 });
                 mirror_row.set_active(status.output.mirror);
+
+                if let Some(audio) = &status.audio {
+                    audio_switch.set_active(audio.enabled);
+                    let backend = match audio.backend.as_str() {
+                        "pipewire" => "PipeWire",
+                        "pulseaudio" => "PulseAudio",
+                        _ => "Audio server",
+                    };
+                    if audio.active {
+                        audio_device_row
+                            .set_subtitle(&format!("{} ({})", audio.label, audio.source));
+                        let channels = match audio.channels {
+                            1 => "mono",
+                            2 => "stereo",
+                            _ => "multi-channel",
+                        };
+                        audio_server_row.set_subtitle(&format!(
+                            "{backend} • {} kHz {channels}",
+                            audio.sample_rate / 1000
+                        ));
+                    } else if audio.enabled {
+                        audio_device_row.set_subtitle("Not available");
+                        audio_server_row.set_subtitle(
+                            audio
+                                .message
+                                .as_deref()
+                                .unwrap_or("No audio server is reachable"),
+                        );
+                    } else {
+                        audio_device_row.set_subtitle("Disabled");
+                        audio_server_row.set_subtitle(&format!("{backend} available"));
+                    }
+                }
 
                 let readers = if status.consumers.is_empty() {
                     "Nobody is using the camera".to_string()

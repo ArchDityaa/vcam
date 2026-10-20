@@ -7,7 +7,9 @@ use clap::{Parser, Subcommand};
 use gstreamer as gst;
 use serde_json::Value;
 use vcam_core::ipc::{Command, Request, ServerMessage};
-use vcam_core::{format_time_ms, parse_time_ms, Config, DoctorReport, PlaybackState, Status};
+use vcam_core::{
+    format_time_ms, parse_time_ms, AudioStatus, Config, DoctorReport, PlaybackState, Status,
+};
 
 #[derive(Debug, Parser)]
 #[command(name = "vcam", version, about = "Control the vcam virtual camera")]
@@ -86,6 +88,11 @@ enum Commands {
         #[arg(value_name = "on|off")]
         state: String,
     },
+    /// Control the virtual microphone companion
+    Audio {
+        #[command(subcommand)]
+        command: AudioCommands,
+    },
     /// Run diagnostics on the module, device, and GStreamer installation
     Doctor {
         /// Device to check (defaults to the configured device)
@@ -114,6 +121,16 @@ enum ProfileCommands {
         #[arg(value_name = "on|off")]
         state: String,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum AudioCommands {
+    /// Create the virtual microphone and feed the source's audio into it
+    On,
+    /// Remove the virtual microphone
+    Off,
+    /// Print the virtual microphone state
+    Status,
 }
 
 fn main() {
@@ -246,6 +263,20 @@ fn run() -> Result<(), String> {
             let data = request(&socket, Command::SetCompatibility { enabled })?;
             print_status_value(&data)?;
         }
+        Commands::Audio { command } => match command {
+            AudioCommands::On => {
+                let data = request(&socket, Command::SetAudio { enabled: true })?;
+                print_status_value(&data)?;
+            }
+            AudioCommands::Off => {
+                let data = request(&socket, Command::SetAudio { enabled: false })?;
+                print_status_value(&data)?;
+            }
+            AudioCommands::Status => {
+                let data = request(&socket, Command::Status)?;
+                print_status_value(&data)?;
+            }
+        },
         Commands::Doctor { device } => {
             // Run locally rather than through the daemon: the daemon cannot
             // start when the device is missing, which is exactly the case the
@@ -386,6 +417,9 @@ fn print_status(status: &Status) {
         status.output.pixel_format,
         status.output.fit
     );
+    if let Some(audio) = &status.audio {
+        print_audio(audio);
+    }
     if let Some(profile) = &status.profile {
         println!("Profile:  {profile}");
     }
@@ -405,6 +439,43 @@ fn print_status(status: &Status) {
     }
     if let Some(message) = &status.message {
         println!("Message:  {message}");
+    }
+}
+
+fn print_audio(audio: &AudioStatus) {
+    let channels = match audio.channels {
+        1 => "mono",
+        2 => "stereo",
+        _ => "multi-channel",
+    };
+    if audio.active {
+        let backend = match audio.backend.as_str() {
+            "pipewire" => "PipeWire",
+            "pulseaudio" => "PulseAudio",
+            _ => "audio server",
+        };
+        println!(
+            "Audio:    {} ({}, {} kHz {}, via {backend})",
+            audio.label,
+            audio.source,
+            audio.sample_rate / 1000,
+            channels
+        );
+    } else if audio.enabled {
+        println!(
+            "Audio:    unavailable ({})",
+            audio
+                .message
+                .as_deref()
+                .unwrap_or("no audio server is reachable")
+        );
+    } else {
+        println!("Audio:    disabled");
+    }
+    if audio.active {
+        if let Some(message) = &audio.message {
+            println!("          {message}");
+        }
     }
 }
 

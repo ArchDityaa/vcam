@@ -1,4 +1,4 @@
-.TH VCAM 1 "2026-10-20" "vcam 0.2.0" "User Commands"
+.TH VCAM 1 "2026-10-20" "vcam 0.3.0" "User Commands"
 .SH NAME
 vcam \- control the vcam virtual camera
 .SH SYNOPSIS
@@ -75,6 +75,17 @@ running, because those applications routinely fail to list a loopback device
 that only offers
 .BR NV12 .
 The configured pixel format is restored when they exit.
+.TP
+.B audio on|off|status
+Create or remove the virtual microphone companion, or print its state.
+The microphone is a PulseAudio/PipeWire null sink plus a remapped source fed by
+the source's audio track. It follows pause, seek, looping and stop, and is muted
+during the short pipeline run used for paused seeks. It needs
+.B pactl
+from
+.IR pulseaudio-utils ;
+without a reachable sound server the camera keeps working and the microphone is
+reported as unavailable.
 .TP
 .B status [\-\-json]
 Print daemon status.

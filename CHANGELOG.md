@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-20
+
+### Added
+
+- **Virtual microphone companion** — the daemon plays the source's audio track
+  into a PulseAudio/PipeWire null sink (`vcam_sink`) and exposes a remapped
+  source (`vcam_mic`) on that sink's monitor, so applications see a
+  **Virtual Microphone** next to the camera. It is enabled by default
+  (`[audio] enabled = true`) and follows playback exactly: pause, seek, looping
+  and stop apply to sound and video together. The short pipeline run used for
+  paused seeks is muted, and the microphone stays connected but silent while
+  nothing is playing.
+- The branch is attached only when the file actually has an audio track. A sink
+  that never receives data would never receive `EOS`, which would have broken
+  looping for video-only sources.
+- Existing sessions are adopted instead of duplicated, so a daemon crash followed
+  by `Restart=on-failure` does not stack `vcam_sink.2`, `vcam_sink.3`, ...
+  modules; unloading removes the remapped source before the sink.
+- Audio failures are isolated: a missing `pactl`, an unreachable sound server or
+  a failing `pulsesink` only disables the microphone, with the reason in
+  `Status::audio.message`. The camera keeps running.
+- `vcam audio on|off|status`, an audio line in `vcam status`, and `Status::audio`
+  with backend, node names, format and state.
+- **Audio tab** in `vcam-gui` with an enable switch and live backend/device
+  information.
+- `vcam doctor` reports the sound server, the microphone node and the audio
+  GStreamer elements; these checks are informational because audio is optional.
+- `tests/audio.sh` — end-to-end coverage for signal while playing, silence while
+  paused, resume, idempotent enable/disable and cleanup on shutdown.
+
+### Changed
+
+- `pactl` is used instead of linking `libpulse`, keeping the build free of an
+  extra C dependency and working identically on PipeWire's PulseAudio
+  compatibility server and on PulseAudio.
+- Module descriptions are escaped because PipeWire's server splits arguments on
+  spaces and does not honour plain quotes (`Virtual Microphone` would become
+  `Virtual`).
+- Packaging recommends `pulseaudio-utils`; README, man pages, architecture and
+  troubleshooting document the companion.
+
 ## [0.2.0] - 2026-10-20
 
 ### Added

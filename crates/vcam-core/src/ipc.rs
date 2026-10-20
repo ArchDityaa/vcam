@@ -74,6 +74,10 @@ pub enum Command {
     SetCompatibility {
         enabled: bool,
     },
+    /// Turn the virtual microphone companion on or off.
+    SetAudio {
+        enabled: bool,
+    },
     /// Report the configured profiles and the active one.
     Profiles,
     Doctor,
@@ -96,6 +100,7 @@ impl Command {
             Self::SetProfile { .. } => "set_profile",
             Self::SetProfileAuto { .. } => "set_profile_auto",
             Self::SetCompatibility { .. } => "set_compatibility",
+            Self::SetAudio { .. } => "set_audio",
             Self::Profiles => "profiles",
             Self::Doctor => "doctor",
             Self::Reload => "reload",

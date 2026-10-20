@@ -1,4 +1,4 @@
-.TH VCAMD 1 "2026-10-20" "vcam 0.2.0" "User Commands"
+.TH VCAMD 1 "2026-10-20" "vcam 0.3.0" "User Commands"
 .SH NAME
 vcamd \- virtual camera daemon
 .SH SYNOPSIS
@@ -35,6 +35,19 @@ defers any change that would renegotiate the device caps until they let go. With
 .B auto_profiles
 enabled it applies matching
 .B [[profiles]]
+.PP
+When
+.B [audio]
+is enabled (the default), the daemon also creates a virtual microphone with
+.BR pactl (1):
+a null sink receives the source's audio track and a remapped source on that
+sink's monitor is what applications record from. The modules are adopted when
+they already exist, so restarts do not create duplicates, and they are removed
+when the daemon exits. A missing sound server only disables the microphone; the
+camera keeps working. The sink and source names, the description and the sample
+format are configured in the
+.B [audio]
+table of the configuration file.
 .SH OPTIONS
 .TP
 .B \-\-config FILE

@@ -25,6 +25,31 @@ pub struct OutputSpec {
     pub rotate: u32,
 }
 
+/// Snapshot of the virtual microphone companion.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioStatus {
+    /// Whether the companion is enabled in the configuration.
+    pub enabled: bool,
+    /// Whether a PulseAudio/PipeWire server could be reached.
+    pub available: bool,
+    /// `pipewire`, `pulseaudio`, or `unknown`.
+    pub backend: String,
+    /// Sink the pipeline plays into.
+    pub sink: String,
+    /// Source applications see as a microphone.
+    pub source: String,
+    /// Description shown in application device lists.
+    pub label: String,
+    pub sample_rate: u32,
+    pub channels: u32,
+    /// Whether the sink and remapped source exist in the sound server.
+    pub active: bool,
+    /// Whether the decoder currently feeds audio into the sink.
+    pub playing: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
 /// Snapshot of the daemon state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Status {
@@ -38,6 +63,9 @@ pub struct Status {
     pub label: String,
     pub message: Option<String>,
     pub version: String,
+    /// Virtual microphone companion, when one is configured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<AudioStatus>,
     /// Applications currently holding the device open.
     #[serde(default)]
     pub consumers: Vec<Consumer>,

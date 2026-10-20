@@ -87,6 +87,7 @@ format:
 
 ```
 filesrc -> decodebin3 -> videoconvert -> videoscale -> videorate -> capsfilter -> appsink
+                     \-> audioconvert -> audioresample -> capsfilter -> queue -> volume -> pulsesink
 ```
 
 - `appsink` uses `sync=true`, so frames become available at their presentation
@@ -115,6 +116,61 @@ the whole time.
 the controller seeks back to zero and keeps playing; otherwise it stops the
 decoder, reports `playback finished`, and shows the black placeholder.
 
+## The virtual microphone
+
+With `[audio] enabled` (the default), `vcamd` creates two session modules with
+`pactl` while it starts:
+
+```
+module-null-sink    sink_name=vcam_sink  sink_properties=device.description="Virtual Microphone"
+module-remap-source master=vcam_sink.monitor source_name=vcam_mic
+                    source_properties=device.description="Virtual Microphone"
+```
+
+Applications record from `vcam_mic`; the daemon plays into `vcam_sink` and the
+remapped source forwards the sink's monitor. On shutdown the source is unloaded
+before the sink, because the reverse order would leave a source pointing at a
+monitor that no longer exists. Modules with the configured names are *adopted*
+rather than created again, so a crash followed by `Restart=on-failure`, or a
+repeated `vcam audio on`, never stacks `vcam_sink.2`, `vcam_sink.3`, ... copies.
+
+The audio branch is part of the decoder pipeline and is attached lazily, when
+`decodebin3` exposes the first audio pad:
+
+```
+decodebin3 -> audioconvert -> audioresample -> capsfilter (S16LE, rate, channels)
+           -> queue -> volume -> pulsesink device=vcam_sink
+```
+
+Laziness is not cosmetic: a sink that never receives a buffer never receives
+`EOS` either, so keeping an unlinked audio sink in the pipeline would make the
+pipeline wait for an EOS that never comes and break looping for video-only
+sources. The branch therefore exists only when the file actually has audio.
+
+`pulsesink` runs with `provide-clock=false`. Adding audio must not switch the
+pipeline clock, because the video `appsink` paces frames against that clock;
+`sync=true` aligns audio to the same clock and the queue absorbs device jitter.
+Since the branch belongs to the decoder, pause, seek, loop and stop apply to
+sound and video together. The one special case is the paused-seek preview: the
+controller briefly runs the pipeline to render a frame and mutes the `volume`
+element for that window, so seeking while paused is not audible.
+
+Audio failures are isolated from the camera. If the sink cannot be created, or
+errors while streaming, the controller drops the audio branch, rebuilds the
+decoder without it and keeps the device running; the reason is published in
+`Status::audio.message` and shown by `vcam status` and the GUI. A missing
+`pactl` or sound server at startup is treated the same way: the modules are not
+created, the camera starts normally, and `vcam audio status` explains why. The
+`vcam doctor` checks for the backend and the elements are informational, so a
+machine without audio does not look like a broken camera.
+
+`vcam-core::audio` also contains the module-argument parser and the description
+escaper. The escaper is needed because PipeWire's PulseAudio compatibility
+server splits module arguments on spaces and does not honour plain quotes:
+`Virtual Microphone` would be stored as `Virtual`. Escaping spaces and quotes
+is why `pactl list short modules` shows
+`device.description="Virtual\ Microphone"`.
+
 ## IPC protocol
 
 The socket lives at `$XDG_RUNTIME_DIR/vcam.sock` (configurable). Messages are
@@ -124,6 +180,15 @@ Request:
 
 ```json
 {"id": 1, "command": "start", "source": "/home/you/movie.mp4"}
+```
+
+The daemon accepts `start`, `stop`, `pause`, `resume`, `seek`, `set_source`,
+`set_loop`, `set_output`, `set_profile`, `set_profile_auto`,
+`set_compatibility`, `set_audio`, `status`, `profiles`, `doctor` and
+`shutdown`. Toggling the virtual microphone uses the same envelope:
+
+```json
+{"id": 2, "command": "set_audio", "enabled": false}
 ```
 
 Response:
