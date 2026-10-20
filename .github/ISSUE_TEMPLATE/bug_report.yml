@@ -43,6 +43,7 @@ body:
         - vcamd (daemon)
         - vcam (CLI)
         - vcam-gui (GTK4 panel)
+        - virtual microphone (audio)
         - packaging (.deb, systemd, udev)
         - documentation
         - not sure
@@ -77,6 +78,16 @@ body:
       render: shell
       placeholder: |
         $ vcam doctor
+        ...
+
+  - type: textarea
+    id: audio
+    attributes:
+      label: "`vcam audio status` output (microphone issues only)"
+      description: Also include `pactl info` and `pactl list short sources | grep vcam_mic` when the virtual microphone is involved.
+      render: shell
+      placeholder: |
+        $ vcam audio status
         ...
 
   - type: textarea

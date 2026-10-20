@@ -30,6 +30,7 @@ they never own the capture pipeline and can come and go freely.
 - [Quick start](#quick-start)
 - [Command line](#command-line)
 - [GUI](#gui)
+- [Virtual microphone](#virtual-microphone)
 - [Configuration](#configuration)
 - [How it works](#how-it-works)
 - [Application compatibility](#application-compatibility)
@@ -52,6 +53,7 @@ compositor-independent producer:
 | Stable caps and a black placeholder while idle | ✅ | ⚠️ depends on OBS | ❌ |
 | Hot-swap source, pause, resume, seek | ✅ | ⚠️ through OBS | ❌ |
 | Safe output changes while apps are streaming | ✅ (deferred) | ❌ | ❌ |
+| Virtual microphone that follows playback | ✅ | ❌ | ❌ |
 | Per-application output profiles | ✅ | ❌ | ❌ |
 | Watchdog with automatic recovery | ✅ | ❌ | ❌ |
 | Unprivileged user daemon | ✅ | ✅ | ✅ |
@@ -213,6 +215,37 @@ node names and the sound server it is using. The GUI is an IPC client: you can
 use it alongside the CLI and both stay in sync.
 
 ![vcam-gui demo](docs/assets/demo.gif)
+
+## Virtual microphone
+
+The source's audio track can be exposed as a normal microphone. It is enabled by
+default: `vcamd` creates a PulseAudio/PipeWire null sink and a remapped source
+called **Virtual Microphone** (`vcam_mic`), then plays the audio through it in
+step with the video. Pick **Virtual Microphone** in the microphone settings of
+the application that should receive it.
+
+<p align="center">
+  <img src="docs/assets/vcam-gui-audio.png" alt="vcam-gui Audio tab" width="620">
+</p>
+
+```sh
+vcam audio status   # backend, sink and source names
+vcam audio off      # remove the sink and source
+vcam audio on       # create them again
+```
+
+Audio follows playback: pause, seek, looping and stop apply to sound and video
+together, and the short pipeline run used for paused-seek previews is muted.
+While nothing is playing the microphone stays connected and silent, so
+applications can select it before playback starts and keep it selected across
+sources. Sources without an audio track are silent too.
+
+The microphone is best-effort. If `pactl` or a sound server is unavailable,
+playback continues, `vcam status` keeps working, and the **Audio** tab explains
+the error. The `[audio]` table in [Configuration](#configuration) changes the
+node names and whether the companion starts automatically; see
+[Troubleshooting](docs/troubleshooting.md#the-virtual-microphone-does-not-appear-or-is-silent)
+when the source does not show up.
 
 ## Configuration
 

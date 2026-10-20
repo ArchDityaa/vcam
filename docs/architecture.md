@@ -182,6 +182,15 @@ Request:
 {"id": 1, "command": "start", "source": "/home/you/movie.mp4"}
 ```
 
+The daemon accepts `start`, `stop`, `pause`, `resume`, `seek`, `set_source`,
+`set_loop`, `set_output`, `set_profile`, `set_profile_auto`,
+`set_compatibility`, `set_audio`, `status`, `profiles`, `doctor` and
+`shutdown`. Toggling the virtual microphone uses the same envelope:
+
+```json
+{"id": 2, "command": "set_audio", "enabled": false}
+```
+
 Response:
 
 ```json

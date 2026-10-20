@@ -6,9 +6,10 @@ Start with:
 vcam doctor
 ```
 
-It checks the module, the device node, permissions, the card label and the
-GStreamer elements that vcam needs. The sections below explain the failures it
-reports.
+It checks the module, the device node, permissions, the card label, the
+GStreamer elements that vcam needs, and — when the virtual microphone is
+enabled — the `pactl` backend and the `vcam_sink`/`vcam_mic` nodes. The sections
+below explain the failures it reports.
 
 ## The module does not load
 
@@ -281,7 +282,13 @@ GST_DEBUG=3 vcamd                  # GStreamer element logging
 
 ```sh
 vcam stop
+vcam audio off      # unload vcam_sink/vcam_mic before stopping the daemon
 vcam shutdown
 pkill -x vcamd
 rm -f "$XDG_RUNTIME_DIR/vcam.sock"
 ```
+
+If a crashed daemon left the audio modules behind, remove them by name with
+`pactl unload-module`; the command in
+[the microphone section](#the-virtual-microphone-does-not-appear-or-is-silent)
+shows how to find them.
