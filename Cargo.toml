@@ -38,9 +38,9 @@ tokio = { version = "1", features = [
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
-gstreamer = { version = "0.23", features = ["v1_24"] }
-gstreamer-app = { version = "0.23", features = ["v1_24"] }
-gstreamer-video = { version = "0.23", features = ["v1_24"] }
+gstreamer = { version = "0.25", features = ["v1_24"] }
+gstreamer-app = { version = "0.25", features = ["v1_24"] }
+gstreamer-video = { version = "0.25", features = ["v1_24"] }
 glib = "0.20"
 gtk4 = { version = "0.9", features = ["v4_14"] }
 libadwaita = { version = "0.7", features = ["v1_5"] }
