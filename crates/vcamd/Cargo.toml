@@ -29,4 +29,4 @@ gstreamer-app.workspace = true
 gstreamer-video.workspace = true
 glib.workspace = true
 libc.workspace = true
-sd-notify = "0.4"
+sd-notify = "0.5"
